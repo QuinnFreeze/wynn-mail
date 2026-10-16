@@ -1,7 +1,7 @@
 import type { D1Database, R2Bucket } from '@cloudflare/workers-types';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { describeProviderError } from './context';
 import { listAddressesForUser } from './domains';
 import {

@@ -45,7 +45,26 @@ strings, replaced with unambiguous fixtures rather than excluding tests from sca
 Local validation includes frozen installation, the full tests, type checking, a
 production build, Bun's advisory audit, a clean-publication check, and redacted
 Gitleaks scans of the exact publication tree and Git history. CI repeats these
-checks without deployment secrets. Actions and the Gitleaks release/checksum are pinned. The full type checker uses an explicit 4 GiB heap budget rather than narrowing diagnostics; the local default 2 GiB was insufficient after dependency updates.
+checks without deployment secrets. Actions and the Gitleaks release/checksum are
+pinned. MCP schemas use the SDK-supported Zod 4 entry point with matching dependency
+versions. The full type checker uses an explicit 4 GiB heap budget; the local
+default 2 GiB was insufficient after dependency updates.
+
+Final validation of this source revision:
+
+| Check | Result |
+| --- | --- |
+| Full synthetic test suite | 474 passed, 0 failed across 44 files |
+| Full Svelte/TypeScript check | 0 errors; 4 existing UI/reactivity/accessibility warnings remain |
+| Production build | Passed |
+| Bun dependency-advisory audit | No reported advisories |
+| Publication baseline / known private deployment and OAuth markers | Passed / no matches |
+| Gitleaks intended source tree and complete public Git history | No leaks detected |
+| Fresh unconfigured runtime | No mailbox session; Google/GitHub start disabled until own clients are configured |
+
+These checks detect known patterns and observed regressions; they do not prove
+absence of every secret, vulnerability or policy violation. Reproducible checks
+and their latest results are available in [GitHub Actions](https://github.com/QuinnFreeze/wynn-mail/actions).
 
 ## Remaining boundaries
 

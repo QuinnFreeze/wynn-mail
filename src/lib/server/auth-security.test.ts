@@ -55,20 +55,25 @@ describe('password rotation', () => {
 		let reportInsert!: () => void;
 		const insertReady = new Promise<void>((resolve) => { reportInsert = resolve; });
 		const insertAllowed = new Promise<void>((resolve) => { releaseInsert = resolve; });
-		const pausedDb = {
-			...db,
-			prepare(sql: string) {
-				const statement = db.prepare(sql);
-				if (!/INSERT\s+INTO\s+sessions\b/i.test(sql)) return statement;
-				const run = statement.run.bind(statement);
-				statement.run = (async () => {
-					reportInsert();
-					await insertAllowed;
-					return run();
-				}) as typeof statement.run;
-				return statement;
+		const pausedDb = new Proxy(db, {
+			get(target, property) {
+				if (property !== 'prepare') {
+					const value = Reflect.get(target, property, target);
+					return typeof value === 'function' ? value.bind(target) : value;
+				}
+				return (sql: string) => {
+					const statement = target.prepare(sql);
+					if (!/INSERT\s+INTO\s+sessions\b/i.test(sql)) return statement;
+					const run = statement.run.bind(statement);
+					statement.run = (async () => {
+						reportInsert();
+						await insertAllowed;
+						return run();
+					}) as typeof statement.run;
+					return statement;
+				};
 			}
-		};
+		});
 
 		const inFlightLogin = login(pausedDb, user.email, 'test-only-old-password');
 		await Promise.race([

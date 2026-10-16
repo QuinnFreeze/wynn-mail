@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 
 const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
 assert(files.length > 0, 'Stage the public source before checking it.');
@@ -9,9 +10,10 @@ const forbiddenPath = /(^|\/)(node_modules|\.svelte-kit|\.wrangler|\.build|\.git
 const credentials = /(?:GOCSPX-[A-Za-z0-9_-]{15,}|gh[pousr]_[A-Za-z0-9_]{30,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b\d{10,}-[a-z0-9]{10,}\.apps\.googleusercontent\.com\b)/;
 for (const file of files) {
   assert(!forbiddenPath.test(file), `Private/runtime file is tracked: ${file}`);
-  assert(!/^\.env(?:\.|$)/.test(file) || file === '.env.example', `Environment file is tracked: ${file}`);
-  assert(!/^\.dev\.vars(?:\.|$)/.test(file) || file === '.dev.vars.example', `Secret file is tracked: ${file}`);
-  assert(!['deployment-resources.json', 'DEPLOYMENT.zh-CN.md', 'package-lock.json'].includes(file), `Local/stale file: ${file}`);
+  const name = basename(file);
+  assert(!/^\.env(?:\.|$)/i.test(name) || file === '.env.example', `Environment file is tracked: ${file}`);
+  assert(!/^\.dev\.vars(?:\.|$)/i.test(name) || file === '.dev.vars.example', `Secret file is tracked: ${file}`);
+  assert(!['deployment-resources.json', 'DEPLOYMENT.zh-CN.md', 'package-lock.json'].includes(name), `Local/stale file: ${file}`);
   const stat = lstatSync(file);
   assert(!stat.isSymbolicLink(), `Symlink is tracked: ${file}`);
   assert(stat.size < 2 * 1024 * 1024, `Unexpectedly large source file: ${file}`);

@@ -142,7 +142,7 @@
 					disabled={!configured || loading || socialBusy !== null}
 					onclick={() => void startSocialLogin(provider)}
 				>
-					{#if provider === 'google'}<GoogleMark size={17} />{:else}<Icon name="github-fill" size={17} />{/if}
+					{#if provider === 'google'}<GoogleMark size={20} />{:else}<Icon name="github-fill" size={17} />{/if}
 					{socialBusy === provider
 						? t('common.connecting')
 						: t('social.signInWith', { provider: provider === 'google' ? 'Google' : 'GitHub' })}
