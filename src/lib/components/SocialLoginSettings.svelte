@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import Icon from '$lib/components/Icon.svelte';
 	import googleSignInMark from '$lib/assets/google-signin-round.png';
+	import googleSignInMarkDark from '$lib/assets/google-signin-round-dark.png';
 	import { t } from '$lib/i18n';
 
 	type Provider = 'google' | 'github';
@@ -112,7 +113,8 @@
 				<li class="provider-row">
 					<span class="provider-icon" class:google={provider === 'google'} aria-hidden="true">
 						{#if provider === 'google'}
-							<img class="google-mark" src={googleSignInMark} width="36" height="36" alt="" />
+							<img class="google-mark google-mark-light" src={googleSignInMark} width="36" height="36" alt="" />
+							<img class="google-mark google-mark-dark" src={googleSignInMarkDark} width="36" height="36" alt="" />
 						{:else}
 							<Icon name="github-fill" size={20} />
 						{/if}
@@ -152,9 +154,14 @@
 	.providers { display: flex; flex-direction: column; margin: 0.875rem 0 0; padding: 0; list-style: none; }
 	.provider-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.875rem 0; }
 	.provider-row + .provider-row { border-top: 1px solid var(--color-line); }
-	.provider-icon { display: flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; border: 1px solid var(--color-line); border-radius: 0.625rem; flex-shrink: 0; }
-	.provider-icon.google { border: 0; border-radius: 50%; }
+	.provider-icon { display: flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; border: 1px solid #747775; border-radius: 50%; background: #fff; flex-shrink: 0; }
+	.provider-icon.google { border: 0; background: transparent; }
 	.google-mark { display: block; width: 100%; height: 100%; }
+	.google-mark-dark { display: none; }
+	:global(:root[data-theme='dark']) .provider-icon { border-color: #8e918f; background: #131314; }
+	:global(:root[data-theme='dark']) .provider-icon.google { background: transparent; }
+	:global(:root[data-theme='dark']) .google-mark-light { display: none; }
+	:global(:root[data-theme='dark']) .google-mark-dark { display: block; }
 	.provider-details { flex: 1; min-width: 0; }
 	.provider-name { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0; font-size: 0.875rem; font-weight: 500; }
 	.connection-status { font-size: 0.75rem; font-weight: 400; color: var(--color-muted); }

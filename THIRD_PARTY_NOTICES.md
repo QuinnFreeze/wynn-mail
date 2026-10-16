@@ -61,10 +61,15 @@ The component crops the surrounding button padding, removes nonvisual export
 metadata and makes SVG identifiers unique; the G geometry and gradient colors are
 retained. The source is also documented in the component.
 
-The account-linking settings use the unmodified 160 × 160 PNG in
-`src/lib/assets/google-signin-round.png` from the same official bundle:
-`Android + Web/PNG @4x/Light/Theme=Light, Show text=No, Shape=Pill, Platform=Android+Web@4x.png`.
-It is displayed proportionally with its original round background, border and
+The account-linking settings use two unmodified 160 × 160 PNGs from the same
+official bundle, selected by the application's current light/dark theme:
+
+- `src/lib/assets/google-signin-round.png`:
+  `Android + Web/PNG @4x/Light/Theme=Light, Show text=No, Shape=Pill, Platform=Android+Web@4x.png`.
+- `src/lib/assets/google-signin-round-dark.png`:
+  `Android + Web/PNG @4x/Dark/Theme=Dark, Show text=No, Shape=Pill, Platform=Android+Web@4x.png`.
+
+Each is displayed proportionally with its original round background, border and
 padding, avoiding small-size SVG filter rendering and duplicate outer borders.
 
 Google and the Google G are trademarks of Google LLC. This brand asset is **not
