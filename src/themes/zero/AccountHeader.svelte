@@ -208,11 +208,13 @@
 						{/if}
 					</div>
 				{/if}
-				<Tooltip text={t('account.addAddress')}>
-					<a href="/settings/connections" class="z-tile add" aria-label={t('account.addAddress')}>
-						<Icon name="Plus" size={14} />
-					</a>
-				</Tooltip>
+				{#if data.user.is_admin}
+					<Tooltip text={t('account.addAddress')}>
+						<a href="/settings/connections" class="z-tile add" aria-label={t('account.addAddress')}>
+							<Icon name="Plus" size={14} />
+						</a>
+					</Tooltip>
+				{/if}
 			</div>
 			<div class="z-account-actions">
 				<LocaleSwitcher
@@ -262,10 +264,12 @@
 						</span>
 					</button>
 				{/each}
-				<a href="/settings/connections" onclick={closeMenus}>
-					<Icon name="Plus" size={16} />
-					{t('account.addAddress')}
-				</a>
+				{#if data.user.is_admin}
+					<a href="/settings/connections" onclick={closeMenus}>
+						<Icon name="Plus" size={16} />
+						{t('account.addAddress')}
+					</a>
+				{/if}
 			{/if}
 			{#if collapsed}
 				<LocaleSwitcher embedded />

@@ -71,6 +71,35 @@ There is no shipped administrator, default password or public signup. Use the ad
 UI for password resets. The old command-line reset helper is omitted to avoid
 passwords in process arguments and shell history.
 
+## Account roles and mailbox allocation
+
+The first setup account is the administrator who owns the installation. Existing
+roles and mail remain intact; this change uses the existing `is_admin` field and
+does not require a new database migration or create extra accounts.
+
+There are two roles:
+
+| Action | Administrator | Standard account |
+| --- | --- | --- |
+| Read/send mail using own assigned addresses | Yes | Yes |
+| Edit own display names, signatures and default address | Yes | Yes |
+| Create accounts and mailboxes | Yes | No |
+| Allocate additional mailboxes to an existing account | Yes | No |
+| Manage roles, domains and installation settings | Yes | No |
+
+Open `/admin` to create an account with its first mailbox, or allocate an extra
+mailbox to an existing account. New accounts are standard unless an administrator
+explicitly grants administrator access. The recipient must replace their temporary
+password on first login. Only administrators may change another account's role;
+self-demotion and removing the last administrator are blocked.
+
+Standard accounts see their role and assigned addresses in settings. An account
+with no assigned address waits for administrator allocation rather than claiming
+an address itself. The API enforces the role independently of the interface, and
+administrator API tokens additionally need the `admin` scope. Mobile sessions
+retain their mailbox-only allowlist and cannot create addresses or administer users.
+OAuth login links existing accounts; it does not register users or grant a role.
+
 ## Delivery webhook
 
 Create a Resend webhook at `https://mail.example.com/api/webhooks/resend` for

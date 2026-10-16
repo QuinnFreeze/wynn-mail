@@ -17,8 +17,8 @@ export const load: PageServerLoad = async ({ locals, platform }) => {
 		providerKind
 	};
 
-	// Only the admin talks to the provider; everyone else just claims an address
-	// on an already-connected domain.
+	// Only administrators connect domains and assign mailbox addresses.
+	// Standard accounts wait for an assignment without contacting the provider.
 	if (!locals.user?.is_admin) {
 		return { ...base, available: [] as AvailableDomain[], providerConfigured: true, loadError: null };
 	}

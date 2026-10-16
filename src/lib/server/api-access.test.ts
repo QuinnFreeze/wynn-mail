@@ -257,6 +257,19 @@ describe('API key access', () => {
 		);
 	});
 
+	test('paired mobile sessions cannot provision addresses or enter account administration', () => {
+		for (const pathname of ['/api/addresses', '/api/admin/users', '/api/admin/users/user-1']) {
+			const decision = authorizeApiRequest({
+				pathname,
+				method: 'POST',
+				authMethod: 'mobile_session',
+				scopes: ['admin']
+			});
+			assert.equal(decision.ok, false);
+			if (!decision.ok) assert.equal(decision.status, 403);
+		}
+	});
+
 	test('mailbox flag actions need mail:read; destructive actions need both scopes', () => {
 		assert.deepEqual(
 			authorizeMailAction({ action: 'star', authMethod: 'session', scopes: [] }),

@@ -13,6 +13,8 @@ each developer decides whether to integrate them using their own accounts.
 ## Included
 
 - Password login and optional Google/GitHub identity linking; no public signup.
+- Administrator and standard accounts. Only administrators create accounts and
+  mailboxes; standard accounts use addresses assigned to them.
 - Cloudflare inbound mail and verified-domain, Sending-access-only Resend outbound mail.
 - Web inbox, reply threading, attachment downloads and privately stored inbound `.eml` files.
 - Optional OpenRouter OAuth with free-model-only routing; explicit API-key providers.

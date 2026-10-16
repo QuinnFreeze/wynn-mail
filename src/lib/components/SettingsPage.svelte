@@ -693,6 +693,14 @@
 
 	{#if show('general')}
 	<section class="surface-lg card">
+		<h2><Icon name="shield-user-line" size={18} /> {t('settings.roleTitle')}</h2>
+		<p class="account-role">{data.isAdmin ? t('settings.roleAdmin') : t('settings.roleMember')}</p>
+		<p class="card-hint">
+			{data.isAdmin ? t('settings.roleAdminHint') : t('settings.roleMemberHint')}
+		</p>
+	</section>
+
+	<section class="surface-lg card">
 		<h2><Icon name="pencil-line" size={18} /> {t('settings.signature')}</h2>
 		<p class="card-hint">{t('settings.signatureHint')}</p>
 
@@ -726,6 +734,9 @@
 		<p class="card-hint">
 			{t('settings.addressesHint')}
 		</p>
+		{#if !data.isAdmin}
+			<p class="card-hint">{t('settings.assignedByAdmin')}</p>
+		{/if}
 
 		<ul class="address-list">
 			{#each addresses as address (address.id)}
@@ -777,35 +788,37 @@
 			{/each}
 		</ul>
 
-		<form class="add-form" onsubmit={addAddress}>
-			<div class="add-field">
-				<label class="field-title" for="new-display-name">{t('settings.fromName')}</label>
-				<input
-					id="new-display-name"
-					type="text"
-					bind:value={displayName}
-					placeholder="Support"
-					class="name-add-input"
-					autocomplete="off"
-				/>
-				<AddressField
-					bind:localPart
-					bind:domainId
-					domains={data.domains}
-					placeholder="another"
-					label={t('settings.addressLabel')}
-				/>
-			</div>
-			<button type="submit" class="btn-primary" disabled={busy || !localPart.trim()}>
-				{busy ? t('common.adding') : t('common.add')}
-			</button>
-		</form>
+		{#if data.isAdmin}
+			<form class="add-form" onsubmit={addAddress}>
+				<div class="add-field">
+					<label class="field-title" for="new-display-name">{t('settings.fromName')}</label>
+					<input
+						id="new-display-name"
+						type="text"
+						bind:value={displayName}
+						placeholder="Support"
+						class="name-add-input"
+						autocomplete="off"
+					/>
+					<AddressField
+						bind:localPart
+						bind:domainId
+						domains={data.domains}
+						placeholder="another"
+						label={t('settings.addressLabel')}
+					/>
+				</div>
+				<button type="submit" class="btn-primary" disabled={busy || !localPart.trim()}>
+					{busy ? t('common.adding') : t('common.add')}
+				</button>
+			</form>
 
-		{#if selectedDomain && !selectedDomain.receiving_enabled}
-			<p class="hint">
-				<Icon name="information-line" size={14} />
-				{t('settings.canSendNotReceive', { domain: selectedDomain.name })}
-			</p>
+			{#if selectedDomain && !selectedDomain.receiving_enabled}
+				<p class="hint">
+					<Icon name="information-line" size={14} />
+					{t('settings.canSendNotReceive', { domain: selectedDomain.name })}
+				</p>
+			{/if}
 		{/if}
 
 		{#if error}<p class="error">{error}</p>{/if}
@@ -1453,6 +1466,12 @@
 		border-radius: 9999px;
 		color: var(--color-on-accent);
 		background: var(--color-accent);
+	}
+
+	.account-role {
+		margin-top: 0.75rem;
+		font-size: 0.875rem;
+		font-weight: 600;
 	}
 
 	.address-list {

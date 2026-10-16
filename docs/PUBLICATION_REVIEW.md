@@ -33,6 +33,14 @@ Regression coverage uses synthetic requests and real in-memory SQLite, including
 attachment access boundaries, permission combinations, reset revocation and login races.
 No live exploit mail or third-party security-scanning upload was used.
 
+Account provisioning now additionally enforces administrator-only mailbox creation.
+The interface shows administrator/standard roles and allocation controls; the
+server separately checks current role and credential scope. Standard accounts
+cannot claim addresses or promote themselves, and unassigned accounts wait for an
+administrator. Existing accounts, mail and role data are preserved without a schema
+migration. Synthetic handler/SQLite tests cover forged requests and stale elevated
+tokens after demotion.
+
 ## Dependency and source checks
 
 The old npm lock was omitted; Bun is the reproducible lock/install path. Compatible
@@ -54,7 +62,7 @@ Final validation of this source revision:
 
 | Check | Result |
 | --- | --- |
-| Full synthetic test suite | 474 passed, 0 failed across 44 files |
+| Full synthetic test suite | 483 passed, 0 failed across 45 files |
 | Full Svelte/TypeScript check | 0 errors; 4 existing UI/reactivity/accessibility warnings remain |
 | Production build | Passed |
 | Bun dependency-advisory audit | No reported advisories |

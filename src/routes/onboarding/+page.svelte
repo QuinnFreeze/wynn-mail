@@ -33,7 +33,7 @@
 	});
 
 	// Step 1 only appears for an admin who hasn't connected anything yet.
-	const needsDomain = $derived(data.domains.length === 0);
+	const needsDomain = $derived(data.isAdmin && data.domains.length === 0);
 	const connectable = $derived(data.available.filter((domain) => !domain.connected));
 	const cleanLocal = $derived(localPart.trim().toLowerCase().replace(/@.*$/, ''));
 	const activeDomain = $derived(data.domains.find((domain) => domain.id === addressDomainId));
@@ -96,24 +96,29 @@
 </svelte:head>
 
 <WizardShell
-	title={needsDomain ? t('onboarding.connectDomain') : t('onboarding.claimAddress')}
-	subtitle={needsDomain
-		? onboardingSubtitle(data.providerKind)
-		: t('onboarding.chooseAddress')}
+	title={!data.isAdmin
+		? t('onboarding.waitingAssignmentTitle')
+		: needsDomain ? t('onboarding.connectDomain') : t('onboarding.claimAddress')}
+	subtitle={!data.isAdmin
+		? t('settings.assignedByAdmin')
+		: needsDomain ? onboardingSubtitle(data.providerKind) : t('onboarding.chooseAddress')}
 	partner={needsDomain}
 	partnerKind={data.providerKind}
 	partnerCaption={t('setup.partnerCaption', { app: APP_NAME, provider: providerName(data.providerKind) })}
 >
-	{#if needsDomain}
-		{#if !data.isAdmin}
-			<div class="surface-lg notice">
-				<Icon name="time-line" size={18} />
-				<div>
-					<p class="notice-title">{t('onboarding.waitingAdminTitle')}</p>
-					<p class="notice-body">{t('onboarding.waitingAdminBody')}</p>
-				</div>
+	{#if !data.isAdmin}
+		<div class="surface-lg notice">
+			<Icon name="time-line" size={18} />
+			<div>
+				<p class="notice-title">{t('onboarding.waitingAssignmentTitle')}</p>
+				<p class="notice-body">{t('onboarding.waitingAssignmentBody')}</p>
 			</div>
-		{:else if !data.providerConfigured || data.loadError}
+		</div>
+		{#if data.addresses.length > 0}
+			<a class="btn-primary w-full py-2.5 mt-4" href="/inbox">{t('onboarding.openInbox')}</a>
+		{/if}
+	{:else if needsDomain}
+		{#if !data.providerConfigured || data.loadError}
 			<div class="surface-lg notice notice-warn">
 				<Icon name={data.providerConfigured ? 'error-warning-line' : 'key-2-line'} size={18} />
 				<div>

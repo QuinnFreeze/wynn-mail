@@ -18,11 +18,24 @@
 	let name = $state('');
 	let password = $state('');
 	let makeAdmin = $state(false);
+	let mailboxUserId = $state('');
+	let mailboxDomainId = $state('');
+	let mailboxLocalPart = $state('');
+	let mailboxError = $state('');
+	let allocatingMailbox = $state(false);
+	let mailboxReady = $state(false);
 
 	$effect(() => {
 		if (!newUserDomainId && data.domains[0]) {
 			newUserDomainId = data.domains[0].id;
 		}
+		if (!mailboxDomainId && data.domains[0]) {
+			mailboxDomainId = data.domains[0].id;
+		}
+		if (!mailboxUserId) {
+			mailboxUserId = data.user?.id ?? data.users[0]?.id ?? '';
+		}
+		mailboxReady = true;
 	});
 	let userError = $state('');
 	let creatingUser = $state(false);
@@ -81,6 +94,33 @@
 			userError = t('common.networkError');
 		} finally {
 			creatingUser = false;
+		}
+	}
+
+	async function allocateMailbox(event: SubmitEvent) {
+		event.preventDefault();
+		mailboxError = '';
+		allocatingMailbox = true;
+		try {
+			const response = await fetch('/api/addresses', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					userId: mailboxUserId,
+					domainId: mailboxDomainId,
+					localPart: mailboxLocalPart
+				})
+			});
+			const body = await response.json();
+			if (!response.ok) {
+				mailboxError = body.error ?? t('admin.mailboxCreatedFailed');
+				return;
+			}
+			window.location.reload();
+		} catch {
+			mailboxError = t('common.networkError');
+		} finally {
+			allocatingMailbox = false;
 		}
 	}
 
@@ -333,7 +373,7 @@
 				<div class="role-row">
 					<Check
 						label={t('admin.makeAdmin')}
-						caption={t('nav.admin')}
+						caption={t('settings.roleAdmin')}
 						checked={makeAdmin}
 						onchange={(next) => (makeAdmin = next)}
 					/>
@@ -356,6 +396,9 @@
 						<div class="user-avatar">{(user.name[0] ?? '?').toUpperCase()}</div>
 						<div class="min-w-0 flex-1">
 							<p class="user-name">{user.name}</p>
+							<span class="admin-badge">
+								{user.is_admin ? t('settings.roleAdmin') : t('settings.roleMember')}
+							</span>
 							<p class="user-email">
 								{data.addresses
 									.filter((address) => address.user_id === user.id)
@@ -366,16 +409,12 @@
 								<p class="user-status">{t('admin.pendingAccountSetup')}</p>
 							{/if}
 						</div>
-						{#if user.id === data.user?.id}
-							{#if user.is_admin}
-								<span class="admin-badge">{t('nav.admin')}</span>
-							{/if}
-						{:else}
+						{#if user.id !== data.user?.id}
 							<Check
 								label={user.is_admin
 									? t('admin.removeAdminFrom', { name: user.name })
 									: t('admin.makeNamedAdmin', { name: user.name })}
-								caption={t('nav.admin')}
+								caption={t('settings.roleAdmin')}
 								checked={user.is_admin}
 								disabled={changingRole === user.id}
 								onchange={(next) => setRole(user.id, next)}
@@ -400,6 +439,34 @@
 			{#if deleteError}<p class="error">{deleteError}</p>{/if}
 		</section>
 	</div>
+
+	<section class="surface-lg admin-card">
+		<h2><Icon name="mail-add-line" size={18} /> {t('admin.allocateMailbox')}</h2>
+		<p class="card-hint">{t('admin.allocateMailboxHint')}</p>
+		<form class="mt-4 space-y-3" onsubmit={allocateMailbox}>
+			<fieldset class="space-y-3" disabled={!mailboxReady || allocatingMailbox}>
+				<label class="control" for="mailbox-account">
+					<span class="control-label">{t('admin.mailboxAccount')}</span>
+					<select id="mailbox-account" class="admin-input" bind:value={mailboxUserId} required>
+						{#each data.users as user (user.id)}
+							<option value={user.id}>{user.name} — {user.email}</option>
+						{/each}
+					</select>
+				</label>
+				<AddressField
+					bind:localPart={mailboxLocalPart}
+					bind:domainId={mailboxDomainId}
+					domains={data.domains}
+					placeholder="alias"
+					label={t('settings.addressLabel')}
+				/>
+				{#if mailboxError}<p class="error">{mailboxError}</p>{/if}
+				<button type="submit" class="btn-primary" disabled={allocatingMailbox || !mailboxUserId || !mailboxDomainId || !mailboxLocalPart.trim()}>
+					{allocatingMailbox ? t('common.creating') : t('common.create')}
+				</button>
+			</fieldset>
+		</form>
+	</section>
 
 	<AiProviderSettings scope="instance" />
 

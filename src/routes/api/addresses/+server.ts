@@ -1,5 +1,7 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { createAddress, listAddressesForUser, listAllAddresses } from '$lib/server/domains';
+import { getUserById } from '$lib/server/auth';
+import { authorizeApiRequest } from '$lib/server/api-access';
 
 export const GET: RequestHandler = async ({ locals, platform, url }) => {
 	const db = platform?.env.DB;
@@ -20,30 +22,50 @@ export const GET: RequestHandler = async ({ locals, platform, url }) => {
 
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	const db = platform?.env.DB;
-	if (!db || !locals.user) {
+	if (!db || !locals.user || !locals.authMethod) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
 
-	const body = (await request.json()) as {
-		domainId?: string;
-		localPart?: string;
-		label?: string;
-		userId?: string;
-	};
+	const access = authorizeApiRequest({
+		pathname: '/api/addresses',
+		method: 'POST',
+		authMethod: locals.authMethod,
+		scopes: locals.apiScopes
+	});
+	if (!access.ok) return json({ error: access.error }, { status: access.status });
+	if (!locals.user.is_admin) return json({ error: 'Forbidden' }, { status: 403 });
 
-	if (!body.domainId || !body.localPart) {
-		return json({ error: 'Pick a domain and enter an address' }, { status: 400 });
+	let body: { domainId?: unknown; localPart?: unknown; label?: unknown; userId?: unknown };
+	try {
+		const parsed: unknown = await request.json();
+		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+			return json({ error: 'Invalid request body' }, { status: 400 });
+		}
+		body = parsed as typeof body;
+	} catch {
+		return json({ error: 'Invalid request body' }, { status: 400 });
 	}
 
-	// Admins can provision addresses for other users; everyone else gets their own.
-	const userId = locals.user.is_admin && body.userId ? body.userId : locals.user.id;
+	if (typeof body.domainId !== 'string' || !body.domainId.trim() ||
+		typeof body.localPart !== 'string' || !body.localPart.trim()) {
+		return json({ error: 'Pick a domain and enter an address' }, { status: 400 });
+	}
+	if ((body.userId !== undefined && (typeof body.userId !== 'string' || !body.userId.trim())) ||
+		(body.label !== undefined && body.label !== null && typeof body.label !== 'string')) {
+		return json({ error: 'Invalid account or label' }, { status: 400 });
+	}
+
+	const userId = typeof body.userId === 'string' ? body.userId.trim() : locals.user.id;
+	if (!(await getUserById(db, userId))) {
+		return json({ error: 'Account not found' }, { status: 404 });
+	}
 
 	try {
 		const address = await createAddress(db, {
 			userId,
 			domainId: body.domainId,
 			localPart: body.localPart,
-			label: body.label ?? null
+			label: typeof body.label === 'string' ? body.label : null
 		});
 		return json({ address }, { status: 201 });
 	} catch (error) {
