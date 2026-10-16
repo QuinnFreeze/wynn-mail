@@ -1,0 +1,424 @@
+import { basename } from 'node:path';
+import { normalizeUrl } from './config.ts';
+
+/** Keep downloads inside the working directory — never honor `../` or absolute names. */
+export function safeDownloadName(name: string): string {
+	const base = basename(name.replaceAll('\\', '/'));
+	if (!base || base === '.' || base === '..') return 'attachment';
+	return base;
+}
+
+export class QuickInboxError extends Error {
+	constructor(
+		readonly status: number,
+		message: string
+	) {
+		super(message);
+		this.name = 'QuickInboxError';
+	}
+}
+
+export type MailboxView = 'inbox' | 'archive' | 'starred' | 'drafts' | 'sent' | 'trash' | 'spam';
+
+export type ThreadSummary = {
+	thread_id: string;
+	latest_id: string;
+	subject: string;
+	preview: string;
+	participants: { label: string; address: string; self: boolean }[];
+	message_count: number;
+	is_read: boolean;
+	is_starred: boolean;
+	created_at: string;
+};
+
+export type ThreadMessage = {
+	id: string;
+	direction: 'inbound' | 'outbound';
+	from_addr: string;
+	from_name: string | null;
+	to_addr: string;
+	cc_addr: string | null;
+	subject: string;
+	body_text: string | null;
+	body_html: string | null;
+	created_at: string;
+	attachments: {
+		id: string;
+		filename: string;
+		content_type: string;
+		size_bytes: number;
+	}[];
+};
+
+export type MailboxPage = {
+	threads: ThreadSummary[];
+	total: number;
+	page: number;
+	pageCount: number;
+	pageSize: number;
+};
+
+export type User = {
+	id: string;
+	email: string;
+	name: string;
+	is_admin: boolean;
+};
+
+export type Domain = {
+	id: string;
+	name: string;
+	status: string;
+	sending_enabled: boolean;
+	receiving_enabled: boolean;
+};
+
+export type MailAddress = {
+	id: string;
+	user_id: string;
+	domain_id: string;
+	domain_name: string;
+	address: string;
+	is_default: boolean;
+};
+
+export type UnroutedEmail = {
+	id: string;
+	from_addr: string;
+	to_addr: string;
+	subject: string | null;
+	reason: string;
+	created_at: string;
+};
+
+export type ListThreadsQuery = {
+	view?: MailboxView;
+	q?: string;
+	page?: number;
+	unread?: boolean;
+	starred?: boolean;
+	attachments?: boolean;
+	domain?: string;
+	category?: 'primary' | 'social' | 'promotions' | 'updates' | 'forums';
+	label?: string;
+};
+
+/** Sends that carry a key are sent at most once, however often they are retried. */
+function idempotencyHeaders(key: string | undefined): Record<string, string> {
+	return key ? { 'idempotency-key': key } : {};
+}
+
+export class QuickInboxClient {
+	readonly url: string;
+
+	constructor(
+		url: string,
+		readonly token: string
+	) {
+		this.url = normalizeUrl(url);
+	}
+
+	async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+		const headers = new Headers(init.headers);
+		headers.set('authorization', `Bearer ${this.token}`);
+		headers.set('accept', 'application/json');
+		if (init.body && !headers.has('content-type')) {
+			headers.set('content-type', 'application/json');
+		}
+
+		const res = await fetch(`${this.url}${path}`, { ...init, headers });
+		if (res.headers.get('content-type')?.includes('application/json')) {
+			const body = (await res.json()) as T & { error?: string };
+			if (!res.ok) {
+				throw new QuickInboxError(res.status, body.error ?? res.statusText);
+			}
+			return body;
+		}
+
+		if (!res.ok) {
+			throw new QuickInboxError(res.status, res.statusText);
+		}
+		return undefined as T;
+	}
+
+	async whoami(): Promise<User> {
+		const body = await this.request<{ user: User }>('/api/auth/me');
+		return body.user;
+	}
+
+	async listThreads(query: ListThreadsQuery = {}): Promise<MailboxPage> {
+		const params = new URLSearchParams();
+		if (query.view) params.set('view', query.view);
+		if (query.q) params.set('q', query.q);
+		if (query.page && query.page > 1) params.set('page', String(query.page));
+		if (query.unread) params.set('unread', '1');
+		if (query.starred) params.set('starred', '1');
+		if (query.attachments) params.set('attachments', '1');
+		if (query.domain) params.set('domain', query.domain);
+		if (query.category) params.set('category', query.category);
+		if (query.label) params.set('label', query.label);
+		const suffix = params.size > 0 ? `?${params}` : '';
+		return this.request<MailboxPage>(`/api/mail${suffix}`);
+	}
+
+	async getThread(id: string): Promise<Thread> {
+		return this.request(`/api/mail/${encodeURIComponent(id)}`);
+	}
+
+	async sendMessage(input: {
+		to: string;
+		subject: string;
+		text?: string;
+		html?: string;
+		cc?: string;
+		bcc?: string;
+		fromAddressId?: string;
+		idempotencyKey?: string;
+	}): Promise<{ id: string }> {
+		const { idempotencyKey, ...body } = input;
+		return this.request('/api/mail', {
+			method: 'POST',
+			headers: idempotencyHeaders(idempotencyKey),
+			body: JSON.stringify(body)
+		});
+	}
+
+	async reply(
+		id: string,
+		input: {
+			text?: string;
+			html?: string;
+			fromAddressId?: string;
+			expectedRecipients?: string[];
+			idempotencyKey?: string;
+		}
+	): Promise<{ id: string }> {
+		const { idempotencyKey, ...body } = input;
+		return this.request(`/api/mail/${encodeURIComponent(id)}`, {
+			method: 'POST',
+			headers: idempotencyHeaders(idempotencyKey),
+			body: JSON.stringify(body)
+		});
+	}
+
+	async updateThread(
+		id: string,
+		flags: {
+			isRead?: boolean;
+			isStarred?: boolean;
+			archived?: boolean;
+			trashed?: boolean;
+			spam?: boolean;
+			category?: ListThreadsQuery['category'];
+		}
+	): Promise<{ ok: boolean }> {
+		return this.request(`/api/mail/${encodeURIComponent(id)}`, {
+			method: 'PATCH',
+			body: JSON.stringify(flags)
+		});
+	}
+
+	async listLabels(): Promise<{ id: string; name: string; color: string; slug: string }[]> {
+		const body = await this.request<{ labels: { id: string; name: string; color: string; slug: string }[] }>(
+			'/api/labels'
+		);
+		return body.labels;
+	}
+
+	async setThreadLabels(id: string, labelIds: string[]): Promise<{ ok: boolean }> {
+		return this.request(`/api/mail/${encodeURIComponent(id)}/labels`, {
+			method: 'PUT',
+			body: JSON.stringify({ labelIds })
+		});
+	}
+
+	async listAddresses(all = false): Promise<MailAddress[]> {
+		const suffix = all ? '?all=1' : '';
+		const body = await this.request<{ addresses: MailAddress[] }>(`/api/addresses${suffix}`);
+		return body.addresses;
+	}
+
+	async downloadAttachment(emailId: string, attachmentId: string): Promise<{ bytes: Uint8Array; filename: string; type: string }> {
+		const res = await fetch(
+			`${this.url}/api/mail/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}?download=1`,
+			{ headers: { authorization: `Bearer ${this.token}` } }
+		);
+		if (!res.ok) {
+			throw new QuickInboxError(res.status, 'Failed to download attachment');
+		}
+
+		const disposition = res.headers.get('content-disposition') ?? '';
+		const match = /filename="([^"]+)"/.exec(disposition);
+		const filename = safeDownloadName(match ? decodeURIComponent(match[1]) : attachmentId);
+
+		return {
+			bytes: new Uint8Array(await res.arrayBuffer()),
+			filename,
+			type: res.headers.get('content-type') ?? 'application/octet-stream'
+		};
+	}
+
+	async listUsers(): Promise<{ users: User[]; addresses: MailAddress[] }> {
+		return this.request('/api/admin/users');
+	}
+
+	async createUser(input: {
+		name: string;
+		domainId: string;
+		localPart: string;
+		password: string;
+	}): Promise<{ user: User; address: MailAddress }> {
+		return this.request('/api/admin/users', {
+			method: 'POST',
+			body: JSON.stringify(input)
+		});
+	}
+
+	async deleteUser(id: string): Promise<void> {
+		await this.request(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+	}
+
+	async resetPassword(id: string, password: string): Promise<void> {
+		await this.request(`/api/admin/users/${encodeURIComponent(id)}`, {
+			method: 'PATCH',
+			body: JSON.stringify({ password })
+		});
+	}
+
+	async listDomains(): Promise<{ connected: Domain[]; available: { id: string; name: string; connected: boolean }[] }> {
+		return this.request('/api/domains');
+	}
+
+	async connectDomain(domainId: string): Promise<void> {
+		await this.request('/api/domains', {
+			method: 'POST',
+			body: JSON.stringify({ domainId })
+		});
+	}
+
+	async disconnectDomain(id: string): Promise<void> {
+		await this.request(`/api/domains/${encodeURIComponent(id)}`, { method: 'DELETE' });
+	}
+
+	async createAddress(input: {
+		domainId: string;
+		localPart: string;
+		userId?: string;
+		label?: string;
+	}): Promise<MailAddress> {
+		const body = await this.request<{ address: MailAddress }>('/api/addresses', {
+			method: 'POST',
+			body: JSON.stringify(input)
+		});
+		return body.address;
+	}
+
+	async listUnrouted(limit = 50): Promise<UnroutedEmail[]> {
+		const body = await this.request<{ unrouted: UnroutedEmail[] }>(
+			`/api/admin/unrouted?limit=${limit}`
+		);
+		return body.unrouted;
+	}
+}
+
+/** A client paired with the saved account name it authenticates as. */
+export type AccountClient = { name: string; client: QuickInboxClient };
+
+export type TaggedThread = ThreadSummary & { account: string };
+
+export type MultiAccountPage = {
+	/** Threads from every account, newest first, each tagged with the account it belongs to. */
+	threads: TaggedThread[];
+	accounts: {
+		account: string;
+		url: string;
+		total: number;
+		page: number;
+		pageCount: number;
+		/** Set when that account's request failed; its threads are simply missing. */
+		error?: string;
+	}[];
+};
+
+export type Thread = { threadId: string; subject: string; messages: ThreadMessage[] };
+
+function errorText(error: unknown): string {
+	if (error instanceof QuickInboxError) return `${error.status} ${error.message}`;
+	return error instanceof Error ? error.message : 'Request failed';
+}
+
+/**
+ * Run the same mailbox query on several accounts in parallel and merge the pages.
+ * `page` applies per account. One failing account does not fail the whole listing.
+ */
+export async function listThreadsAcross(
+	clients: AccountClient[],
+	query: ListThreadsQuery = {}
+): Promise<MultiAccountPage> {
+	const results = await Promise.all(
+		clients.map(async ({ name, client }) => {
+			try {
+				const page = await client.listThreads(query);
+				return { name, url: client.url, page, error: undefined };
+			} catch (error) {
+				return { name, url: client.url, page: undefined, error: errorText(error) };
+			}
+		})
+	);
+
+	const threads: TaggedThread[] = [];
+	const accounts: MultiAccountPage['accounts'] = [];
+	for (const result of results) {
+		if (!result.page) {
+			accounts.push({
+				account: result.name,
+				url: result.url,
+				total: 0,
+				page: query.page ?? 1,
+				pageCount: 0,
+				error: result.error
+			});
+			continue;
+		}
+		accounts.push({
+			account: result.name,
+			url: result.url,
+			total: result.page.total,
+			page: result.page.page,
+			pageCount: result.page.pageCount
+		});
+		for (const thread of result.page.threads) threads.push({ ...thread, account: result.name });
+	}
+
+	threads.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+	return { threads, accounts };
+}
+
+/**
+ * Find which account owns a thread or message id. Ids are unique per instance, so
+ * try each account in order and treat 404 as "not here". Other errors propagate.
+ */
+export async function findThreadAcross(
+	clients: AccountClient[],
+	id: string
+): Promise<{ account: AccountClient; thread: Thread }> {
+	for (const account of clients) {
+		try {
+			const thread = await account.client.getThread(id);
+			return { account, thread };
+		} catch (error) {
+			if (error instanceof QuickInboxError && error.status === 404) continue;
+			throw error;
+		}
+	}
+	throw new QuickInboxError(
+		404,
+		clients.length > 1
+			? `No thread or message ${id} in any account (${clients.map((entry) => entry.name).join(', ')})`
+			: `No thread or message ${id}`
+	);
+}
+
+/** Pre-rename aliases so scripts that imported the old names keep working. */
+export { QuickInboxClient as QuickMailClient, QuickInboxError as QuickMailError };

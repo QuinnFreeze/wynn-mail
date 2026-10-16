@@ -1,0 +1,21 @@
+# Copy to .dev.vars for LOCAL development only. Secrets are intentionally empty.
+# Production: `bunx wrangler secret put NAME`. Never commit .dev.vars.
+RESEND_API_KEY=
+RESEND_WEBHOOK_SECRET=
+# Temporary initialization token; remove after creating your administrator.
+BOOTSTRAP_TOKEN=
+# Generate your own random value (at least 32 characters) before AI setup.
+ENCRYPTION_KEY=
+# Optional login providers. Blank = unconfigured; no accounts are linked.
+OAUTH_GOOGLE_CLIENT_ID=
+OAUTH_GOOGLE_CLIENT_SECRET=
+OAUTH_GITHUB_CLIENT_ID=
+OAUTH_GITHUB_CLIENT_SECRET=
+# Optional features stay off unless YOU configure them and accept their data flows.
+TYPESAFE_API_KEY=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_THREAD_ID=
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=

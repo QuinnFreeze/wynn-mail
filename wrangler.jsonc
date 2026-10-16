@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wynn-mail",
+  "main": ".svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2026-10-15",
+  "compatibility_flags": ["nodejs_compat", "enable_nodejs_http_modules"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": { "directory": ".svelte-kit/cloudflare", "binding": "ASSETS" },
+  "vars": {
+    "EMAIL_PROVIDER": "resend",
+    "INBOUND_EMAIL_PROVIDER": "cloudflare",
+    "CLOUDFLARE_MAIL_DOMAINS": "",
+    "RESEND_VERIFIED_SEND_DOMAINS": "",
+    "APP_URL": "",
+    "API_SEND_ENABLED": "false",
+    "API_DAILY_SEND_LIMIT": "50"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "wynn-mail",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "kv_namespaces": [{
+    "binding": "ATTACHMENTS_KV",
+    "id": "00000000000000000000000000000000"
+  }],
+  "observability": { "enabled": false }
+}

@@ -1,0 +1,417 @@
+import assert from 'node:assert/strict';
+import { describe, test } from 'node:test';
+import {
+	authorizeApiRequest,
+	authorizeMailAction,
+	authorizeMailPatch,
+	canAccessDuringFirstLogin
+} from './api-access';
+import { parseScopes } from './api-tokens';
+
+describe('API key access', () => {
+	test('sessions are unrestricted', () => {
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/apikeys',
+				method: 'POST',
+				authMethod: 'session',
+				scopes: []
+			}),
+			{ ok: true }
+		);
+	});
+
+	test('a read key cannot send or manage keys', () => {
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/mail',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}).ok,
+			false
+		);
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/apikeys',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}).ok,
+			false
+		);
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/push/subscriptions',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}).ok,
+			false
+		);
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/push/subscriptions',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}).ok,
+			false
+		);
+	});
+
+	test('a read key can list and open threads', () => {
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/mail/sync',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/mail/sync',
+				method: 'GET',
+				authMethod: 'mobile_session',
+				scopes: []
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/mail',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/mail/abc',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/drafts/abc',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/labels',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/mail/abc/labels',
+				method: 'PUT',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/settings/classify',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}).ok,
+			false
+		);
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/settings/classify',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}).ok,
+			false
+		);
+	});
+
+	test('forwarding stored mail requires both read and send scopes, while people retain access', () => {
+		for (const pathname of ['/api/mail/message-1/forward', '/api/mail/thread/thread-1/forward']) {
+			assert.deepEqual(
+				authorizeApiRequest({ pathname, method: 'POST', authMethod: 'session', scopes: [] }),
+				{ ok: true }
+			);
+			assert.deepEqual(
+				authorizeApiRequest({
+					pathname,
+					method: 'POST',
+					authMethod: 'mobile_session',
+					scopes: []
+				}),
+				{ ok: true }
+			);
+			assert.deepEqual(
+				authorizeApiRequest({
+					pathname,
+					method: 'POST',
+					authMethod: 'api_token',
+						scopes: ['mail:read', 'mail:send']
+				}),
+				{ ok: true }
+			);
+			for (const scopes of [['mail:read'], ['mail:send'], ['admin'], []] as const) {
+				const decision = authorizeApiRequest({ pathname, method: 'POST', authMethod: 'api_token', scopes });
+				assert.equal(decision.ok, false);
+				if (!decision.ok) {
+					assert.equal(decision.status, 403);
+					assert.match(decision.error, /mail:read and mail:send/);
+				}
+			}
+		}
+	});
+
+	test('admin routes stay off mail keys', () => {
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/admin/users',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}).ok,
+			false
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/admin/users',
+				method: 'GET',
+				authMethod: 'api_token',
+				scopes: ['admin']
+			}),
+			{ ok: true }
+		);
+	});
+
+	test('parseScopes rejects admin unless allowed', () => {
+		assert.equal(parseScopes(['mail:read', 'admin'], false), null);
+		assert.deepEqual(parseScopes(['mail:read', 'admin'], true), ['mail:read', 'admin']);
+		assert.equal(parseScopes(['mail:write'], true), null);
+	});
+
+	test('POST /api/mail/actions is allowed for read or send keys', () => {
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/mail/actions',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/mail/actions',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['mail:send']
+			}),
+			{ ok: true }
+		);
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/mail/actions',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['admin']
+			}).ok,
+			false
+		);
+	});
+
+	test('creating an address stays admin-only for API keys', () => {
+		assert.equal(
+			authorizeApiRequest({
+				pathname: '/api/addresses',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['mail:send']
+			}).ok,
+			false
+		);
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/addresses',
+				method: 'POST',
+				authMethod: 'api_token',
+				scopes: ['admin']
+			}),
+			{ ok: true }
+		);
+	});
+
+	test('mailbox flag actions need mail:read; destructive actions need both scopes', () => {
+		assert.deepEqual(
+			authorizeMailAction({ action: 'star', authMethod: 'session', scopes: [] }),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({ action: 'empty-trash', authMethod: 'session', scopes: [] }),
+			{ ok: true }
+		);
+
+		assert.deepEqual(
+			authorizeMailAction({ action: 'read', authMethod: 'api_token', scopes: ['mail:read'] }),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({ action: 'unread', authMethod: 'api_token', scopes: ['mail:read'] }),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({ action: 'star', authMethod: 'api_token', scopes: ['mail:read'] }),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({ action: 'unstar', authMethod: 'api_token', scopes: ['mail:read'] }),
+			{ ok: true }
+		);
+
+		assert.equal(
+			authorizeMailAction({ action: 'star', authMethod: 'api_token', scopes: ['mail:send'] }).ok,
+			false
+		);
+		assert.equal(
+			authorizeMailAction({ action: 'trash', authMethod: 'api_token', scopes: ['mail:read'] }).ok,
+			false
+		);
+		assert.equal(
+			authorizeMailAction({ action: 'delete', authMethod: 'api_token', scopes: ['mail:send'] }).ok,
+			false
+		);
+		assert.equal(
+			authorizeMailAction({
+				action: 'empty-trash',
+				authMethod: 'api_token',
+				scopes: ['mail:send']
+			}).ok,
+			false
+		);
+		assert.equal(
+			authorizeMailAction({
+				action: 'read-all',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}).ok,
+			false
+		);
+
+		assert.deepEqual(
+			authorizeMailAction({
+				action: 'trash',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({
+				action: 'restore',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({
+				action: 'delete',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({
+				action: 'read-all',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({
+				action: 'empty-trash',
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({
+				action: 'spam',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailAction({
+				action: 'categorize',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.equal(
+			authorizeMailAction({
+				action: 'empty-spam',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}).ok,
+			false
+		);
+	});
+
+	test('thread PATCH allows mail:read for flags and still requires both scopes to trash', () => {
+		assert.deepEqual(
+			authorizeApiRequest({
+				pathname: '/api/mail/abc',
+				method: 'PATCH',
+				authMethod: 'api_token',
+				scopes: ['mail:read']
+			}),
+			{ ok: true }
+		);
+		assert.deepEqual(
+			authorizeMailPatch({ authMethod: 'api_token', scopes: ['mail:read'] }),
+			{ ok: true }
+		);
+		assert.equal(
+			authorizeMailPatch({ authMethod: 'api_token', scopes: ['mail:read'], trashed: true }).ok,
+			false
+		);
+		assert.deepEqual(
+			authorizeMailPatch({
+				authMethod: 'api_token',
+				scopes: ['mail:read', 'mail:send'],
+				trashed: false
+			}),
+			{ ok: true }
+		);
+	});
+});
+
+describe('first-login API access', () => {
+	test('only permits the setup completion request', () => {
+		assert.equal(canAccessDuringFirstLogin('/api/auth/complete-setup', 'POST'), true);
+		assert.equal(canAccessDuringFirstLogin('/api/auth/complete-setup', 'GET'), false);
+		assert.equal(canAccessDuringFirstLogin('/api/mail', 'GET'), false);
+	});
+});
