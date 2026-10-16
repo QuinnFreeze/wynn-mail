@@ -100,6 +100,35 @@ administrator API tokens additionally need the `admin` scope. Mobile sessions
 retain their mailbox-only allowlist and cannot create addresses or administer users.
 OAuth login links existing accounts; it does not register users or grant a role.
 
+## Mail retention and scheduled cleanup
+
+Back up an existing D1 database privately before applying migrations. The retention
+migration adds per-user settings (both policies disabled), read-period timestamps,
+indexes and a durable storage-cleanup queue. It does not delete existing mail.
+Historical read timestamps are unknown, so existing read mail starts its clock at
+migration time.
+
+Keep the configured `triggers.crons: ["15 * * * *"]` when deploying the Worker
+wrapper: it checks at minute 15 of each UTC hour. Apply migrations before deploying
+the new code. Cron changes can take up to 15 minutes to propagate. To remove the
+schedule intentionally, deploy `triggers.crons: []`; omitting the setting can leave
+an existing schedule installed.
+
+Settings → General lets each browser-signed-in user configure their own policies.
+Read cleanup moves up to 200 eligible messages to Trash per run; Trash expiry
+permanently removes up to 80 messages. Stored-object cleanup retries at most 20 keys
+per run, so physical deletion can take longer during a backlog or storage outage.
+Manual Empty Trash atomically deletes the current user's current Trash across all
+domains after confirmation, and starts bounded object cleanup. It never acts on
+another user's mailbox.
+
+Limits are deliberately bounded for Workers Free, including its 10 ms Cron CPU
+limit and D1's 50-query invocation limit. Free quotas are shared with other uses;
+monitor your own usage and cleanup backlog. This feature adds no paid bindings or
+automatic plan upgrades. See [Cron documentation](https://developers.cloudflare.com/workers/configuration/cron-triggers/),
+[Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and
+[D1 limits](https://developers.cloudflare.com/d1/platform/limits/).
+
 ## Delivery webhook
 
 Create a Resend webhook at `https://mail.example.com/api/webhooks/resend` for

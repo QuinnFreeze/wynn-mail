@@ -28,7 +28,15 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
 
-	const body = (await request.json()) as ActionBody;
+	let body: ActionBody;
+	try {
+		const input: unknown = await request.json();
+		if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error();
+		body = input as ActionBody;
+		if (body.ids !== undefined && (!Array.isArray(body.ids) || body.ids.length > 500 || body.ids.some((id) => typeof id !== 'string' || id.length > 200))) throw new Error();
+	} catch {
+		return json({ error: 'Invalid request' }, { status: 400 });
+	}
 	const action = body.action;
 
 	if (!isMailAction(action)) {
@@ -53,7 +61,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 	// The list works in conversations, so an action on a row applies to every
 	// message in it — trashing a thread takes its replies along.
-	const ids = await expandToThreads(db, locals.user.id, selected);
+	const ids = WHOLE_MAILBOX.includes(action) ? [] : await expandToThreads(db, locals.user.id, selected);
 
 	let affected = 0;
 

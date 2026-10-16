@@ -73,7 +73,7 @@ async function connect(options: { sendEnabled?: boolean; scopes?: string[] } = {
 				 VALUES (?, ?, 'outbound', 'ada@example.com', 'sam@other.test', 'Re: Plans', 'm1', ?)`
 			)
 			.run(id, user.id, at);
-	return { client, call, sent, addInbound, addOutbound };
+	return { client, call, sent, addInbound, addOutbound, sqlite };
 }
 
 describe('hosted MCP tools', () => {
@@ -106,6 +106,58 @@ describe('hosted MCP tools', () => {
 		assert.ok(!names.includes('send_message'));
 		assert.ok(!names.includes('reply'));
 		assert.ok(names.includes('update_thread'));
+	});
+
+	test('send-only MCP credentials cannot call triage or label tools', async () => {
+		const { client, call, sqlite } = await connect({ scopes: ['mail:send'] });
+		const names = (await client.listTools()).tools.map((tool) => tool.name);
+		assert.ok(!names.includes('update_thread'));
+		assert.ok(!names.includes('set_thread_labels'));
+		for (const [tool, args] of [
+			['update_thread', { id: 'm1', trashed: true }],
+			['set_thread_labels', { id: 'm1', labelIds: [] }]
+		] as const) {
+			const result = await call(tool, args);
+			assert.equal(result.isError, true);
+			assert.match(result.text, /not found/);
+		}
+		assert.deepEqual(sqlite.query('SELECT is_read, is_starred, deleted_at FROM emails WHERE id = ?').all('m1'),
+			[{ is_read: 0, is_starred: 0, deleted_at: null }]);
+	});
+
+	test('read-only MCP credentials can triage and label but cannot trash or restore a conversation', async () => {
+		const { client, call, sqlite } = await connect({ scopes: ['mail:read'] });
+		const names = (await client.listTools()).tools.map((tool) => tool.name);
+		assert.ok(names.includes('update_thread'));
+		assert.ok(names.includes('set_thread_labels'));
+		const triage = await call('update_thread', { id: 'm1', isRead: true, isStarred: true, archived: true });
+		assert.equal(triage.isError, false, triage.text);
+		assert.equal(triage.json().messages_changed, 1);
+		for (const trashed of [true, false]) {
+			const result = await call('update_thread', { id: 'm1', trashed, isStarred: false, archived: false });
+			assert.equal(result.isError, true);
+			assert.match(result.text, /mail:read and mail:send/);
+		}
+		const row = sqlite.query('SELECT is_read, is_starred, archived_at, deleted_at FROM emails WHERE id = ?').all('m1')[0];
+		assert.equal(row.is_read, 1);
+		assert.equal(row.is_starred, 1);
+		assert.ok(row.archived_at);
+		assert.equal(row.deleted_at, null);
+		sqlite.query("INSERT INTO labels(id,user_id,slug,name,color) VALUES ('label-1',?,'plans','Plans','#64748b')").run(user.id);
+		const labeled = await call('set_thread_labels', { id: 'm1', labelIds: ['label-1'] });
+		assert.equal(labeled.isError, false, labeled.text);
+		assert.deepEqual(sqlite.query('SELECT email_id,label_id,source FROM email_labels').all(),
+			[{ email_id: 'm1', label_id: 'label-1', source: 'user' }]);
+	});
+
+	test('MCP credentials with both mail scopes can trash and restore through the actual tool callback', async () => {
+		const { call, sqlite } = await connect();
+		const trashed = await call('update_thread', { id: 'm1', trashed: true });
+		assert.equal(trashed.isError, false, trashed.text);
+		assert.ok(sqlite.query('SELECT deleted_at FROM emails WHERE id = ?').all('m1')[0].deleted_at);
+		const restored = await call('update_thread', { id: 'm1', trashed: false });
+		assert.equal(restored.isError, false, restored.text);
+		assert.equal(sqlite.query('SELECT deleted_at FROM emails WHERE id = ?').all('m1')[0].deleted_at, null);
 	});
 
 	test('get_thread tells the agent where a reply would go', async () => {

@@ -26,5 +26,6 @@
     "binding": "ATTACHMENTS_KV",
     "id": "00000000000000000000000000000000"
   }],
+  "triggers": { "crons": ["15 * * * *"] },
   "observability": { "enabled": false }
 }

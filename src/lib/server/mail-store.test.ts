@@ -14,6 +14,7 @@ import {
 	UNCLASSIFIED_INBOUND_WHERE
 } from './mail-store';
 import { createTestDb, insertTestUser } from './test-db';
+import { drainMailStorageCleanup } from './mail-deletion';
 
 describe('thread participants', () => {
 	test('supplies a real inbound display name', () => {
@@ -279,8 +280,8 @@ test('markAllRead scopes to a label without rewriting the rest of the mailbox', 
 				bind(...values: unknown[]) {
 					binds = values;
 					return {
-						async run() {
-							return { meta: { changes: 2 } };
+						async all() {
+							return { results: [{ id: 'one' }, { id: 'two' }] };
 						}
 					};
 				}
@@ -361,18 +362,17 @@ describe('permanent mail deletion with originals', () => {
 		assert.equal(f.objects.has('raw-messages/owned.eml'), true);
 	});
 
-	test('propagates an original deletion failure and retains its D1 association for retry', async () => {
+	test('queues failed storage deletion durably after atomic mail removal and retries it', async () => {
 		const f = storedMailFixture();
 		f.state.failRawDelete = true;
-		await assert.rejects(
-			deleteEmailsPermanently(f.db, f.bucket, 'user-1', ['owned']),
-			/Original deletion unavailable/
-		);
-		assert.deepEqual(f.sqlite.query("SELECT raw_storage_key FROM emails WHERE id = 'owned'").all(), [
-			{ raw_storage_key: 'raw-messages/owned.eml' }
+		assert.equal(await deleteEmailsPermanently(f.db, f.bucket, 'user-1', ['owned']), 1);
+		assert.deepEqual(f.sqlite.query("SELECT id FROM emails WHERE id = 'owned'").all(), []);
+		assert.deepEqual(f.sqlite.query('SELECT storage_key FROM mail_storage_cleanup').all(), [
+			{ storage_key: 'raw-messages/owned.eml' }
 		]);
 		f.state.failRawDelete = false;
-		assert.equal(await deleteEmailsPermanently(f.db, f.bucket, 'user-1', ['owned']), 1);
+		assert.deepEqual(await drainMailStorageCleanup(f.db, f.bucket), { deleted: 1, failed: 0 });
+		assert.equal(f.sqlite.query('SELECT COUNT(*) AS n FROM mail_storage_cleanup').all()[0].n, 0);
 		assert.equal(f.objects.has('raw-messages/owned.eml'), false);
 		assert.equal(f.objects.has('raw-messages/other.eml'), true);
 	});

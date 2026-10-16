@@ -228,6 +228,8 @@
 		"clearSearch": "Borrar búsqueda",
 		"markAllRead": "Marcar todo como leído",
 		"emptyTrash": "Vaciar papelera",
+		"emptyTrashConfirm": "¿Eliminar permanentemente todo el correo de la papelera de esta cuenta en todos los dominios, incluidos los adjuntos y los originales? No se puede deshacer.",
+		"bulkDone": "Se procesaron {count} elementos.",
 		"emptySpam": "Vaciar spam",
 		"reportSpam": "Marcar como spam",
 		"notSpam": "No es spam",
@@ -712,6 +714,27 @@
 		"cancelPendingOAuthConfirm": "¿Cancelar todas las autorizaciones pendientes de OpenRouter? Las páginas abiertas anteriormente ya no podrán conectar una cuenta.",
 		"pendingOAuthCancelled": "Autorizaciones de IA pendientes canceladas. Las páginas de autorización abiertas anteriormente ya no pueden conectar una cuenta."
 	},
+	"mailRetention": {
+		"title": "Conservación del correo",
+		"description": "Dos reglas independientes para esta cuenta, desactivadas por defecto. Los cambios solo se aplican al guardar.",
+		"readLabel": "Mover automáticamente el correo leído a la papelera",
+		"readHint": "El plazo comienza al marcar un mensaje como leído. Marcarlo como no leído reinicia el contador; restaurar un mensaje leído inicia un nuevo plazo.",
+		"readProtected": "Solo se incluye el correo entrante leído y sin estrella de la bandeja de entrada. Se excluyen los mensajes archivados, el spam, los enviados y los borradores.",
+		"trashLabel": "Eliminar permanentemente el correo antiguo de la papelera",
+		"trashHint": "El plazo comienza al entrar en la papelera, incluidos los mensajes movidos por la regla del correo leído.",
+		"trashWarning": "Elimina permanentemente el correo vencido de la papelera, incluidos los mensajes con estrella, los adjuntos y los originales. No se puede deshacer.",
+		"after": "Después de",
+		"days": "{count} días",
+		"custom": "Personalizado",
+		"customDays": "Número de días",
+		"invalidDays": "Introduce un número entero entre 1 y 3650.",
+		"scheduleHint": "Las comprobaciones se realizan cada hora por lotes, por lo que la limpieza no es inmediata. También se incluye el correo existente. La eliminación de archivos puede demorarse mientras se reintentan las operaciones fallidas.",
+		"unsaved": "Cambios sin guardar",
+		"saved": "Ajustes de conservación guardados.",
+		"loadFailed": "No se pudieron cargar los ajustes de conservación. Vuelve a intentarlo antes de cambiarlos.",
+		"saveFailed": "No se pudieron guardar los ajustes de conservación. Los cambios no están confirmados."
+	},
+
 	"social": {
 		"title": "Cuentas de acceso",
 		"settingsHint": "Vincula Google o GitHub para acceder a este buzón existente. Tu contraseña sigue funcionando; no se crea un nuevo buzón.",

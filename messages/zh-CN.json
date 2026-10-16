@@ -227,7 +227,9 @@
 		"clear": "清除",
 		"clearSearch": "清除搜索",
 		"markAllRead": "全部标为已读",
-		"emptyTrash": "清空垃圾箱",
+		"emptyTrash": "清空回收站",
+		"emptyTrashConfirm": "确定永久删除当前账号所有域名回收站中的邮件及其附件和原始邮件吗？此操作无法恢复。",
+		"bulkDone": "已处理 {count} 项。",
 		"emptySpam": "清空垃圾邮件",
 		"reportSpam": "标记为垃圾邮件",
 		"notSpam": "不是垃圾邮件",
@@ -712,6 +714,27 @@
 		"cancelPendingOAuthConfirm": "取消所有待完成的 OpenRouter 授权？已打开的旧授权页面即使完成授权，也不会再连接账号。",
 		"pendingOAuthCancelled": "已取消待完成的 AI 授权，之前打开的授权页面将无法再连接账号。"
 	},
+	"mailRetention": {
+		"title": "邮件保留",
+		"description": "两项规则独立设置，默认均关闭。点击保存后才会生效。",
+		"readLabel": "自动将已读邮件移入回收站",
+		"readHint": "从邮件本次变为已读时开始计时。标为未读会重置计时；恢复已读邮件后会重新计时。",
+		"readProtected": "仅处理普通收件箱中已读且未加星标的入站邮件。归档、垃圾邮件、已发送和草稿不受此规则影响。",
+		"trashLabel": "自动永久删除回收站旧邮件",
+		"trashHint": "从邮件移入回收站时开始计时，包括由已读邮件规则移入的邮件。",
+		"trashWarning": "到期后永久删除回收站中的邮件，包括星标邮件、附件和原始邮件，无法恢复。",
+		"after": "保留时长",
+		"days": "{count} 天",
+		"custom": "自定义",
+		"customDays": "天数",
+		"invalidDays": "请输入 1 至 3650 之间的整数。",
+		"scheduleHint": "后台每小时分批检查，到期后处理，并非即时执行。规则也适用于已有邮件；文件删除失败时会重试，实际清理可能有延迟。",
+		"unsaved": "更改尚未保存",
+		"saved": "邮件保留设置已保存。",
+		"loadFailed": "无法加载邮件保留设置，请重试后再修改。",
+		"saveFailed": "无法保存邮件保留设置，本次更改尚未确认生效。"
+	},
+
 	"social": {
 		"title": "登录账号",
 		"settingsHint": "关联 Google 或 GitHub 账号，以登录当前邮箱。邮箱密码仍可使用，关联不会创建新邮箱。",

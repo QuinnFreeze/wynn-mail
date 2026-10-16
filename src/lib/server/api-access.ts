@@ -9,7 +9,7 @@ type RouteRule = {
 	method: string;
 	match: (pathname: string) => boolean;
 	scopes: readonly ApiScope[];
-	/** Reading stored mail into a forward requires both read and send permission. */
+	/** Forwarding stored mail and permanent deletion require both mail permissions. */
 	allScopes?: boolean;
 };
 
@@ -108,7 +108,8 @@ const BEARER_ROUTES: RouteRule[] = [
 	{
 		method: 'DELETE',
 		match: (pathname) => /^\/api\/mail\/[^/]+$/.test(pathname),
-		scopes: ['mail:send']
+		scopes: ['mail:read', 'mail:send'],
+		allScopes: true
 	},
 	{
 		method: 'GET',

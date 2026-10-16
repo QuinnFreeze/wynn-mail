@@ -27,6 +27,7 @@ import type { EmailProvider } from './email-provider';
 import type { OAuthScope } from './oauth';
 import { rememberSenders, listLabels, setThreadLabels } from './labels';
 import { isInboxCategory, INBOX_CATEGORIES } from '$lib/mail/categories';
+import { authorizeMailPatch } from './api-access';
 import type { MailboxView, ThreadMessage, User } from '$lib/types';
 
 /**
@@ -155,6 +156,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
 	});
 	const canRead = hasScope(ctx.scopes, 'mail:read');
 	const canSend = hasScope(ctx.scopes, 'mail:send');
+	const mailScopes = (['mail:read', 'mail:send'] as const).filter((scope) => hasScope(ctx.scopes, scope));
 	// The instance switch removes the tools outright, so no client can send.
 	const canSendMail = canSend && ctx.sendPolicy.enabled;
 
@@ -422,11 +424,11 @@ export function createMcpServer(ctx: McpContext): McpServer {
 		);
 	}
 
-	if (canSend) {
+	if (canRead) {
 		server.registerTool(
 			'update_thread',
 			{
-				description: 'Mark a conversation read/unread, star it, archive it, move it to spam, or set its inbox tab.',
+				description: 'Mark a conversation read/unread, star it, archive it, move it to spam, or set its inbox tab. Moving to or restoring from Trash requires both mail:read and mail:send.',
 				annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
 				inputSchema: {
 					id: z.string().describe('Thread id or message id.'),
@@ -447,6 +449,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
 						true
 					);
 				}
+				const access = authorizeMailPatch({ authMethod: 'api_token', scopes: mailScopes, trashed });
+				if (!access.ok) return textResult(access.error, true);
 				try {
 					const ids = await expandToThreads(ctx.db, ctx.user.id, [id]);
 					const changed = await setEmailFlags(ctx.db, ctx.user.id, ids, {

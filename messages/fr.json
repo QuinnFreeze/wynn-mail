@@ -228,6 +228,8 @@
 		"clearSearch": "Effacer la recherche",
 		"markAllRead": "Tout marquer comme lu",
 		"emptyTrash": "Vider la corbeille",
+		"emptyTrashConfirm": "Supprimer définitivement tous les messages de la corbeille de ce compte, sur tous les domaines, avec leurs pièces jointes et originaux ? Cette action est irréversible.",
+		"bulkDone": "{count} éléments traités.",
 		"emptySpam": "Vider le spam",
 		"reportSpam": "Signaler comme spam",
 		"notSpam": "Pas du spam",
@@ -712,6 +714,27 @@
 		"cancelPendingOAuthConfirm": "Annuler toutes les autorisations OpenRouter en attente ? Les pages déjà ouvertes ne pourront plus connecter de compte.",
 		"pendingOAuthCancelled": "Autorisations IA en attente annulées. Les pages d’autorisation déjà ouvertes ne peuvent plus associer de compte."
 	},
+	"mailRetention": {
+		"title": "Conservation des messages",
+		"description": "Deux règles indépendantes pour ce compte, désactivées par défaut. Les modifications ne prennent effet qu’après enregistrement.",
+		"readLabel": "Déplacer automatiquement les messages lus dans la corbeille",
+		"readHint": "Le délai commence quand un message est marqué comme lu. Le marquer comme non lu remet le compteur à zéro ; restaurer un message lu démarre un nouveau délai.",
+		"readProtected": "Seuls les messages reçus, lus et sans étoile dans la boîte de réception sont concernés. Les archives, les indésirables, les messages envoyés et les brouillons sont exclus.",
+		"trashLabel": "Supprimer définitivement les anciens messages de la corbeille",
+		"trashHint": "Le délai commence à l’arrivée dans la corbeille, y compris pour les messages déplacés par la règle des messages lus.",
+		"trashWarning": "Les messages expirés de la corbeille sont supprimés définitivement, y compris les messages avec étoile, les pièces jointes et les originaux. Cette action est irréversible.",
+		"after": "Après",
+		"days": "{count} jours",
+		"custom": "Personnalisé",
+		"customDays": "Nombre de jours",
+		"invalidDays": "Saisissez un entier compris entre 1 et 3650.",
+		"scheduleHint": "Les vérifications ont lieu chaque heure, par lots : le nettoyage n’est pas immédiat. Les messages existants sont aussi concernés. La suppression des fichiers peut être retardée pendant les nouvelles tentatives après un échec.",
+		"unsaved": "Modifications non enregistrées",
+		"saved": "Paramètres de conservation enregistrés.",
+		"loadFailed": "Impossible de charger les paramètres de conservation. Réessayez avant de les modifier.",
+		"saveFailed": "Impossible d’enregistrer les paramètres de conservation. Vos modifications ne sont pas confirmées."
+	},
+
 	"social": {
 		"title": "Comptes de connexion",
 		"settingsHint": "Associez Google ou GitHub pour vous connecter à cette boîte existante. Votre mot de passe reste utilisable ; aucune nouvelle boîte ne sera créée.",

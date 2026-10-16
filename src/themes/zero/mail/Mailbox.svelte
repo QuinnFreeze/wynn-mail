@@ -32,6 +32,9 @@
 	let selected = $state<string[]>([]);
 	let items = $state<ThreadSummary[]>([]);
 	let refreshing = $state(false);
+	let busy = $state(false);
+	let actionError = $state('');
+	let actionStatus = $state('');
 	let isMac = $state(true);
 	let viewsOpen = $state(false);
 
@@ -49,6 +52,14 @@
 	const threadId = $derived($page.url.searchParams.get('thread'));
 	const counts = $derived(($page.data.counts ?? null) as MailboxCounts | null);
 	const showCategoryTabs = $derived(view === 'inbox' && !filters.labelId);
+	// The whole-mailbox API supports inbox categories and labels, but not other filters.
+	const canMarkAllRead = $derived(
+		(view === 'inbox' || Boolean(filters.labelId)) &&
+			!filters.q &&
+			!filters.addressId &&
+			!filters.starredOnly &&
+			!filters.attachmentsOnly
+	);
 	const chip = $derived(
 		filters.unreadOnly ? 'unread' : filters.starredOnly ? 'starred' : 'all'
 	);
@@ -62,7 +73,7 @@
 		const url = new URL($page.url);
 		if (id) url.searchParams.set('thread', id);
 		else url.searchParams.delete('thread');
-		void goto(`${url.pathname}?${url.searchParams.toString()}`.replace(/\?$/, ''), {
+		return goto(`${url.pathname}?${url.searchParams.toString()}`.replace(/\?$/, ''), {
 			keepFocus: true,
 			noScroll: true,
 			replaceState: true
@@ -141,9 +152,34 @@
 		}
 	}
 
-	async function act(action: string, ids: string[]) {
-		await runMailAction(action, ids);
-		await invalidateAll();
+	async function act(action: string, ids: string[] = [], extra: Record<string, unknown> = {}) {
+		if (busy) return;
+		if (action === 'empty-trash' && !window.confirm(t('mailbox.emptyTrashConfirm'))) return;
+		busy = true;
+		actionError = '';
+		actionStatus = '';
+		try {
+			const result = await runMailAction(action, ids, extra);
+			if (action === 'empty-trash') {
+				selected = [];
+				if (threadId) await setThread(null);
+			}
+			await invalidateAll();
+			if (action === 'read-all' || action === 'empty-trash') {
+				actionStatus = t('mailbox.bulkDone', { count: result.affected ?? 0 });
+			}
+		} catch (error) {
+			actionError = t(error instanceof TypeError ? 'mailbox.updateNetwork' : 'mailbox.updateFailed');
+		} finally {
+			busy = false;
+		}
+	}
+
+	function markAllRead() {
+		if (!canMarkAllRead) return;
+		void act('read-all', [], filters.labelId
+			? { labelId: filters.labelId }
+			: { category: filters.category ?? 'primary' });
 	}
 
 	function onRowClick(thread: ThreadSummary, event: MouseEvent) {
@@ -164,6 +200,7 @@
 	}
 
 	function onListKey(event: KeyboardEvent) {
+		if (busy) return;
 		const target = event.target as HTMLElement | null;
 		if (
 			target &&
@@ -320,6 +357,28 @@
 			</button>
 		</div>
 
+		{#if canMarkAllRead || view === 'trash'}
+			<div class="z-bulk-actions" aria-busy={busy}>
+				{#if canMarkAllRead}
+					<button type="button" class="z-bulk-action" disabled={busy} onclick={markAllRead}>
+						<span aria-hidden="true"><Icon name="Check" size={14} /></span>
+						<span>{t('mailbox.markAllRead')}</span>
+					</button>
+				{/if}
+				{#if view === 'trash'}
+					<button type="button" class="z-bulk-action danger" disabled={busy} onclick={() => act('empty-trash')}>
+						<span aria-hidden="true"><Icon name="Trash" size={14} /></span>
+						<span>{t('mailbox.emptyTrash')}</span>
+					</button>
+				{/if}
+			</div>
+		{/if}
+		{#if actionError}
+			<p class="z-action-message error" role="alert">{actionError}</p>
+		{:else if actionStatus}
+			<p class="z-action-message" role="status">{actionStatus}</p>
+		{/if}
+
 		<div class="z-rows">
 			{#if items.length === 0}
 				<div class="z-empty">
@@ -440,3 +499,52 @@
 		/>
 	</section>
 </div>
+
+<style>
+	.z-bulk-actions {
+		display: flex;
+		flex-wrap: wrap;
+		flex-shrink: 0;
+		gap: 0.5rem;
+		padding: 0.25rem 0.75rem 0.625rem;
+	}
+
+	.z-bulk-action {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		max-width: 100%;
+		min-height: 2.25rem;
+		padding: 0.4rem 0.65rem;
+		border: 1px solid var(--z-border);
+		border-radius: 0.5rem;
+		background: transparent;
+		color: var(--z-fg);
+		font-size: 0.8125rem;
+		text-align: left;
+		white-space: normal;
+		overflow-wrap: anywhere;
+		cursor: pointer;
+	}
+
+	.z-bulk-action:hover:not(:disabled) {
+		background: var(--z-hover);
+	}
+
+	.z-bulk-action.danger,
+	.z-action-message.error {
+		color: var(--color-danger);
+	}
+
+	.z-bulk-action:disabled {
+		opacity: 0.5;
+		cursor: progress;
+	}
+
+	.z-action-message {
+		margin: 0 0.75rem 0.625rem;
+		font-size: 0.8125rem;
+		color: var(--z-muted);
+		overflow-wrap: anywhere;
+	}
+</style>

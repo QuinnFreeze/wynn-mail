@@ -228,6 +228,8 @@
 		"clearSearch": "Clear search",
 		"markAllRead": "Mark all as read",
 		"emptyTrash": "Empty trash",
+		"emptyTrashConfirm": "Permanently delete all messages in Trash across all domains for this account, including attachments and original messages? This cannot be undone.",
+		"bulkDone": "Processed {count} items.",
 		"emptySpam": "Empty spam",
 		"reportSpam": "Report spam",
 		"notSpam": "Not spam",
@@ -712,6 +714,27 @@
 		"cancelPendingOAuthConfirm": "Cancel all pending OpenRouter authorizations? Previously opened authorization pages will no longer connect an account.",
 		"pendingOAuthCancelled": "Pending AI authorizations cancelled. Previously opened authorization pages can no longer connect an account."
 	},
+	"mailRetention": {
+		"title": "Mail retention",
+		"description": "Two independent rules for this account, both off by default. Changes take effect only after saving.",
+		"readLabel": "Automatically move read mail to Trash",
+		"readHint": "The timer starts when a message is marked as read. Marking it unread resets the timer; restoring a read message starts a new timer.",
+		"readProtected": "Only read, unstarred incoming Inbox messages are included. Archived mail, Spam, Sent and Drafts are excluded.",
+		"trashLabel": "Permanently delete old Trash",
+		"trashHint": "The timer starts when a message enters Trash, including messages moved by the read-mail rule.",
+		"trashWarning": "Permanently deletes expired Trash, including starred mail, attachments and original messages. This cannot be undone.",
+		"after": "After",
+		"days": "{count} days",
+		"custom": "Custom",
+		"customDays": "Number of days",
+		"invalidDays": "Enter a whole number from 1 to 3650.",
+		"scheduleHint": "Background checks run hourly in batches, so cleanup is not immediate. Existing messages are included. File removal may be delayed while failed deletions are retried.",
+		"unsaved": "Unsaved changes",
+		"saved": "Retention settings saved.",
+		"loadFailed": "Could not load retention settings. Try again before making changes.",
+		"saveFailed": "Could not save retention settings. Your changes have not been confirmed."
+	},
+
 	"social": {
 		"title": "Sign-in accounts",
 		"settingsHint": "Link a Google or GitHub account to sign in to this existing mailbox. Your password keeps working; this does not create a new mailbox.",

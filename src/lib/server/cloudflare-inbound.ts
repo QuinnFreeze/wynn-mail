@@ -125,41 +125,58 @@ export async function handleCloudflareInbound(
 		.bind(providerId, route.userId)
 		.first<{ id: string; raw_storage_key: string | null }>();
 
-	// Persist the original before inserting the parsed message. A stable key
-	// lets a retry recover it even if the D1 insert or association was interrupted.
-	// Never overwrite an already archived original with a later delivery's MIME.
-	const rawStorageKey = existing?.raw_storage_key ??
-		`raw-messages/${await sha256(new TextEncoder().encode(`${route.userId}\n${providerId}`))}.eml`;
-	if (!(await env.ATTACHMENTS.get(rawStorageKey))) {
-		await env.ATTACHMENTS.put(rawStorageKey, raw, {
-			httpMetadata: { contentType: 'message/rfc822' },
-			customMetadata: { filename: 'message.eml' }
-		});
-	}
-
 	if (existing) {
+		// Historic rows without an original reserve a key tied to this row's
+		// generation before writing. A deleted row can never lend it to new mail.
+		const rawStorageKey = existing.raw_storage_key ?? `raw-messages/${existing.id}.eml`;
 		await linkRawMessage(env, existing.id, route.userId, rawStorageKey);
+		try {
+			await storeRawMessage(env, rawStorageKey, raw);
+			const linked = await env.DB.prepare(
+				'SELECT id FROM emails WHERE id = ? AND user_id = ? AND raw_storage_key = ?'
+			).bind(existing.id, route.userId, rawStorageKey).first<{ id: string }>();
+			if (!linked) {
+				throw new Error('Mailbox message was removed while archiving its original');
+			}
+		} catch (error) {
+			// Deletion and its first GC attempt may have finished while put awaited,
+			// including a write that succeeded before its storage response failed.
+			await queueRawMessageCleanup(env, rawStorageKey);
+			throw error;
+		}
 		return;
 	}
 
-	const emailId = await insertEmail(env.DB, {
-		userId: route.userId,
-		direction: 'inbound',
-		from,
-		fromName: sender?.name,
-		to: route.address,
-		cc: mailboxAddresses(parsed.cc).join(', ') || null,
-		subject,
-		bodyText: parsed.text ?? null,
-		bodyHtml: parsed.html ?? null,
-		messageId,
-		inReplyTo,
-		references,
-		domainId: route.domainId,
-		addressId: route.addressId,
-		providerId
-	});
-	await linkRawMessage(env, emailId, route.userId, rawStorageKey);
+	// A new delivery generation never reuses the key of permanently deleted
+	// mail, even when the sender repeats its Message-ID during an older GC run.
+	const rawStorageKey = `raw-messages/${crypto.randomUUID()}.eml`;
+	let emailId: string;
+	try {
+		await storeRawMessage(env, rawStorageKey, raw);
+		emailId = await insertEmail(env.DB, {
+			userId: route.userId,
+			direction: 'inbound',
+			from,
+			fromName: sender?.name,
+			to: route.address,
+			cc: mailboxAddresses(parsed.cc).join(', ') || null,
+			subject,
+			bodyText: parsed.text ?? null,
+			bodyHtml: parsed.html ?? null,
+			messageId,
+			inReplyTo,
+			references,
+			domainId: route.domainId,
+			addressId: route.addressId,
+			providerId,
+			rawStorageKey
+		});
+	} catch (error) {
+		// The insert may have committed before its response failed. GC rechecks
+		// live references, so enqueueing is safe in both commit outcomes.
+		await queueRawMessageCleanup(env, rawStorageKey);
+		throw error;
+	}
 
 	const storedAttachments = await storeInboundAttachments(env, emailId, parsed.attachments);
 	scheduleInboundClassification(env, {
@@ -303,11 +320,37 @@ async function linkRawMessage(
 	storageKey: string
 ): Promise<void> {
 	const result = await env.DB
-		.prepare('UPDATE emails SET raw_storage_key = ? WHERE id = ? AND user_id = ?')
-		.bind(storageKey, emailId, userId)
+		.prepare(`UPDATE emails SET raw_storage_key = ? WHERE id = ? AND user_id = ?
+			AND (raw_storage_key IS NULL OR raw_storage_key = ?)`)
+		.bind(storageKey, emailId, userId, storageKey)
 		.run();
 	if (!result.success || result.meta.changes !== 1) {
 		throw new Error('Failed to associate the original message with its mailbox');
+	}
+}
+
+async function storeRawMessage(
+	env: CloudflareInboundEnv,
+	storageKey: string,
+	raw: Uint8Array<ArrayBuffer>
+): Promise<void> {
+	// Never overwrite an archived original with a later delivery's MIME.
+	if (await env.ATTACHMENTS.get(storageKey)) return;
+	await env.ATTACHMENTS.put(storageKey, raw, {
+		httpMetadata: { contentType: 'message/rfc822' },
+		customMetadata: { filename: 'message.eml' }
+	});
+}
+
+async function queueRawMessageCleanup(env: CloudflareInboundEnv, storageKey: string): Promise<void> {
+	try {
+		await env.DB.prepare(`INSERT INTO mail_storage_cleanup (storage_key) VALUES (?)
+			ON CONFLICT(storage_key) DO UPDATE SET
+				generation = lower(hex(randomblob(16))), created_at = datetime('now')`)
+			.bind(storageKey).run();
+	} catch {
+		// Preserve the original failure. A complete D1 outage can leave an
+		// unreferenced object; KV/R2 and D1 do not share a transaction.
 	}
 }
 

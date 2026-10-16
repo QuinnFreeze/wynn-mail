@@ -6,6 +6,7 @@ import { displaySubject, normalizeSubject, resolveThreadId } from './threads';
 import { buildThreadParticipants } from './thread-participants';
 import { emptyMailboxCounts, parseInboxCategory } from '$lib/mail/categories';
 import { labelsForEmails } from './labels';
+import { deleteMailMatching, drainMailStorageCleanup } from './mail-deletion';
 import type {
 	ClassificationSource,
 	DeliveryStatus,
@@ -62,6 +63,8 @@ export async function insertEmail(
 		domainId?: string | null;
 		addressId?: string | null;
 		providerId?: string | null;
+		/** Associate an inbound original atomically with its new message row. */
+		rawStorageKey?: string | null;
 		status?: MailStatus | null;
 		isRead?: boolean;
 		/** Disable fallback grouping when this message must start a conversation. */
@@ -94,8 +97,8 @@ export async function insertEmail(
 				id, user_id, direction, from_addr, from_name, to_addr, cc_addr, bcc_addr, subject,
 				body_text, body_html, message_id, in_reply_to, references_header,
 				reply_to_email_id, thread_id, thread_key,
-				domain_id, address_id, provider_id, status, status_at, is_read
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`
+				domain_id, address_id, provider_id, status, status_at, is_read, raw_storage_key
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)`
 		)
 		.bind(
 			id,
@@ -119,7 +122,8 @@ export async function insertEmail(
 			input.addressId ?? null,
 			input.providerId ?? null,
 			input.status ?? null,
-			input.isRead ? 1 : 0
+			input.isRead ? 1 : 0,
+			input.rawStorageKey ?? null
 		)
 		.run();
 
@@ -690,7 +694,7 @@ export async function setEmailFlags(
 		assignments.push(update.archived ? "archived_at = datetime('now')" : 'archived_at = NULL');
 	}
 	if (update.trashed !== undefined) {
-		assignments.push(update.trashed ? "deleted_at = datetime('now')" : 'deleted_at = NULL');
+		assignments.push(update.trashed ? "deleted_at = COALESCE(deleted_at, datetime('now'))" : 'deleted_at = NULL');
 	}
 	if (update.spam !== undefined) {
 		if (update.spam) {
@@ -716,11 +720,11 @@ export async function setEmailFlags(
 		const result = await db
 			.prepare(
 				`UPDATE emails SET ${assignments.join(', ')}
-				 WHERE user_id = ? AND id IN (${placeholders})`
+				 WHERE user_id = ? AND id IN (${placeholders}) RETURNING id`
 			)
 			.bind(...bindings, userId, ...group)
-			.run();
-		changes += result.meta?.changes ?? 0;
+			.all<{ id: string }>();
+		changes += result.results.length;
 	}
 
 	if (bumpEpoch) await bumpMailboxEpoch(db, userId);
@@ -737,52 +741,15 @@ export async function deleteEmailsPermanently(
 ): Promise<number> {
 	if (ids.length === 0) return 0;
 
-	const placeholders = ids.map(() => '?').join(', ');
-	const owned = await db
-		.prepare(`SELECT id, raw_storage_key FROM emails WHERE user_id = ? AND id IN (${placeholders})`)
-		.bind(userId, ...ids)
-		.all<{ id: string; raw_storage_key: string | null }>();
-
-	const ownedIds = owned.results.map((row) => row.id);
-	if (ownedIds.length === 0) return 0;
-
-	const ownedPlaceholders = ownedIds.map(() => '?').join(', ');
-
-	if (bucket) {
-		const { results: files } = await db
-			.prepare(
-				`SELECT storage_key FROM email_attachments
-				 WHERE email_id IN (${ownedPlaceholders}) AND storage_key IS NOT NULL`
-			)
-			.bind(...ownedIds)
-			.all<{ storage_key: string }>();
-
-		await Promise.all(files.map((file) => bucket.delete(file.storage_key)));
-		await Promise.all(
-			owned.results
-				.filter((row) => row.raw_storage_key)
-				.map((row) => bucket.delete(row.raw_storage_key!))
-		);
+	let affected = 0;
+	for (const group of chunkIds([...new Set(ids)])) {
+		affected += await deleteMailMatching(db, bucket, {
+			where: `e.user_id = ? AND e.id IN (${group.map(() => '?').join(',')})`,
+			bindings: [userId, ...group]
+		});
 	}
-
-	// Older D1 databases were created without ON DELETE CASCADE enforcement,
-	// so clear the children explicitly.
-	await db
-		.prepare(`DELETE FROM email_attachments WHERE email_id IN (${ownedPlaceholders})`)
-		.bind(...ownedIds)
-		.run();
-
-	await db
-		.prepare(`DELETE FROM email_labels WHERE email_id IN (${ownedPlaceholders})`)
-		.bind(...ownedIds)
-		.run();
-
-	await db
-		.prepare(`DELETE FROM emails WHERE user_id = ? AND id IN (${ownedPlaceholders})`)
-		.bind(userId, ...ownedIds)
-		.run();
-
-	return ownedIds.length;
+	if (affected) await drainMailStorageCleanup(db, bucket);
+	return affected;
 }
 
 /** "Mark all as read" from the list menu — scoped to the active domain filter. */
@@ -810,11 +777,11 @@ export async function markAllRead(
 	}
 
 	const result = await db
-		.prepare(`UPDATE emails SET is_read = 1 WHERE ${scope}`)
+		.prepare(`UPDATE emails SET is_read = 1 WHERE ${scope} RETURNING id`)
 		.bind(...bindings)
-		.run();
+		.all<{ id: string }>();
 
-	return result.meta?.changes ?? 0;
+	return result.results.length;
 }
 
 export async function emptySpam(
@@ -822,17 +789,12 @@ export async function emptySpam(
 	bucket: R2Bucket | undefined,
 	userId: string
 ): Promise<number> {
-	const { results } = await db
-		.prepare('SELECT id FROM emails WHERE user_id = ? AND spam_at IS NOT NULL AND deleted_at IS NULL')
-		.bind(userId)
-		.all<{ id: string }>();
-
-	return deleteEmailsPermanently(
-		db,
-		bucket,
-		userId,
-		results.map((row) => row.id)
-	);
+	const affected = await deleteMailMatching(db, bucket, {
+		where: 'e.user_id = ? AND e.spam_at IS NOT NULL AND e.deleted_at IS NULL',
+		bindings: [userId]
+	});
+	if (affected) await drainMailStorageCleanup(db, bucket);
+	return affected;
 }
 
 export async function getThreadUserCategory(
@@ -879,17 +841,14 @@ export async function emptyTrash(
 	bucket: R2Bucket | undefined,
 	userId: string
 ): Promise<number> {
-	const { results } = await db
-		.prepare('SELECT id FROM emails WHERE user_id = ? AND deleted_at IS NOT NULL')
-		.bind(userId)
-		.all<{ id: string }>();
-
-	return deleteEmailsPermanently(
-		db,
-		bucket,
-		userId,
-		results.map((row) => row.id)
-	);
+	// One transaction snapshots this user's current trash, across domain filters.
+	// Concurrent restores committed first are excluded; later trash arrivals wait.
+	const affected = await deleteMailMatching(db, bucket, {
+		where: 'e.user_id = ? AND e.deleted_at IS NOT NULL',
+		bindings: [userId]
+	});
+	if (affected) await drainMailStorageCleanup(db, bucket);
+	return affected;
 }
 
 export type DraftInput = {

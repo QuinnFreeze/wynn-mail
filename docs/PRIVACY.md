@@ -38,3 +38,29 @@ Local disconnection blocks use by this mailbox, but does not promise vendor-side
 revocation. Also revoke the app/key in the provider's authorized-app/API-key settings.
 Mail HTML is scriptless, but remote images still load. `no-referrer` hides the
 Referer, not IP/time/tracking IDs. Attachment restrictions are not malware scanning.
+
+## User-controlled mail retention
+
+Both automatic policies are disabled by default and belong to the signed-in
+account. Users can independently enable either policy and choose 1–3650 days
+(presets: 3, 7, 15, 30). A Worker Cron checks hourly in bounded batches; expiry
+makes mail eligible, not an exact-time deletion promise.
+
+The read-mail policy moves ordinary inbound inbox mail into Trash after the
+configured continuous read period. Starred, archived, spam, draft and sent mail
+are excluded. `read_at` records the current read period: marking unread resets
+it, rereading does not, and restoring read mail starts a new period. Existing
+read mail starts its clock when this schema migration is installed because its
+historical read time is unknown.
+
+The separate Trash policy permanently removes any mail that has spent the
+configured period in Trash, including starred mail, drafts and sent mail already
+placed there. Restoring mail before cleanup prevents this policy deleting it.
+“Empty Trash” permanently removes the current user's Trash across all domain
+filters after confirmation. These operations cannot be undone in the app.
+
+Permanent deletion atomically removes mail/attachment database rows and queues
+stored original/attachment keys for deletion. Bounded background cleanup retries
+storage failures; physical object removal can lag behind database deletion.
+Operator backups, platform recovery windows and recipient copies are separate
+and are not erased by this app's retention controls.

@@ -11,6 +11,7 @@
 	import { formatRelativeDate } from '$lib/utils/date';
 	import { haptic, isPrimaryTab } from '$lib/app-chrome';
 	import { INBOX_CATEGORIES, categoryNavKey, categoryUnread } from '$lib/mail/categories';
+	import { runMailAction } from '$lib/mail/client';
 	import { plural, t } from '$lib/i18n';
 	import type {
 		MailAddress,
@@ -52,6 +53,14 @@
 			: META[view]
 	);
 	const showCategoryTabs = $derived(view === 'inbox' && !filters.labelId);
+	// The whole-mailbox API supports inbox categories and labels, but not other filters.
+	const canMarkAllRead = $derived(
+		(view === 'inbox' || Boolean(filters.labelId)) &&
+			!filters.q &&
+			!filters.addressId &&
+			!filters.starredOnly &&
+			!filters.attachmentsOnly
+	);
 	const addresses = $derived(($currentPage.data.addresses ?? []) as MailAddress[]);
 
 	/** The identity a conversation arrived on — shown only when it disambiguates. */
@@ -66,6 +75,7 @@
 	let selected = $state<string[]>([]);
 	let busy = $state(false);
 	let actionError = $state('');
+	let actionStatus = $state('');
 	let filterOpen = $state(false);
 	let moreOpen = $state(false);
 	let moveOpen = $state(false);
@@ -153,26 +163,30 @@
 	/** One entry point for every list action, so the UI always refreshes after. */
 	async function run(action: string, ids: string[] = selected, extra: Record<string, unknown> = {}) {
 		if (busy) return;
+		if (action === 'empty-trash' && !window.confirm(t('mailbox.emptyTrashConfirm'))) return;
 		actionError = '';
+		actionStatus = '';
 		busy = true;
 		try {
-			const response = await fetch('/api/mail/actions', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action, ids, ...extra })
-			});
-			if (!response.ok) {
-				actionError = t('mailbox.updateFailed');
-				return;
-			}
+			const result = await runMailAction(action, ids, extra);
 			selected = [];
 			await invalidateAll();
-		} catch {
-			actionError = t('mailbox.updateNetwork');
+			if (action === 'read-all' || action === 'empty-trash') {
+				actionStatus = t('mailbox.bulkDone', { count: result.affected ?? 0 });
+			}
+		} catch (error) {
+			actionError = t(error instanceof TypeError ? 'mailbox.updateNetwork' : 'mailbox.updateFailed');
 		} finally {
 			busy = false;
 			moreOpen = false;
 		}
+	}
+
+	function markAllRead() {
+		if (!canMarkAllRead) return;
+		void run('read-all', [], filters.labelId
+			? { labelId: filters.labelId }
+			: { category: filters.category ?? 'primary' });
 	}
 
 	function beginLongPress(thread: ThreadSummary, event: PointerEvent) {
@@ -575,15 +589,12 @@
 									<Icon name="close-circle-line" size={15} /> {t('mailbox.clearFilters')}
 								</button>
 							{/if}
-							{#if !filters.q}
+							{#if canMarkAllRead}
 								<button
 									type="button"
 									class="menu-item"
-									onclick={() =>
-										run('read-all', [], {
-											...(view === 'inbox' && !filters.labelId ? { category: filters.category } : {}),
-											...(filters.labelId ? { labelId: filters.labelId } : {})
-										})}
+									disabled={busy}
+									onclick={markAllRead}
 								>
 									<Icon name="mail-open-line" size={15} /> {t('mailbox.markAllRead')}
 								</button>
@@ -595,6 +606,7 @@
 								<button
 									type="button"
 									class="menu-item danger"
+									disabled={busy}
 									onclick={() => run('empty-trash', [])}
 								>
 									<Icon name="delete-bin-2-line" size={15} /> {t('mailbox.emptyTrash')}
@@ -734,6 +746,23 @@
 		</div>
 	</header>
 
+	{#if canMarkAllRead || view === 'trash'}
+		<div class="mailbox-bulk-actions" aria-busy={busy}>
+			{#if canMarkAllRead}
+				<button type="button" class="bulk-action-btn" disabled={busy} onclick={markAllRead}>
+					<span aria-hidden="true"><Icon name="mail-open-line" size={15} /></span>
+					<span>{t('mailbox.markAllRead')}</span>
+				</button>
+			{/if}
+			{#if view === 'trash'}
+				<button type="button" class="bulk-action-btn danger" disabled={busy} onclick={() => run('empty-trash', [])}>
+					<span aria-hidden="true"><Icon name="delete-bin-2-line" size={15} /></span>
+					<span>{t('mailbox.emptyTrash')}</span>
+				</button>
+			{/if}
+		</div>
+	{/if}
+
 	{#if showCategoryTabs}
 		<nav class="category-tabs" aria-label={t('nav.inbox')}>
 			{#each INBOX_CATEGORIES as category (category)}
@@ -758,6 +787,8 @@
 
 	{#if actionError}
 		<p class="action-error" role="alert">{actionError}</p>
+	{:else if actionStatus}
+		<p class="action-status" role="status">{actionStatus}</p>
 	{/if}
 
 	{#if activeFilterCount > 0}
@@ -1070,6 +1101,51 @@
 		margin: 0.75rem 0.875rem 0;
 		font-size: 0.875rem;
 		color: var(--color-danger);
+	}
+
+	.action-status {
+		margin: 0.75rem 0.875rem 0;
+		font-size: 0.875rem;
+		color: var(--color-muted);
+		overflow-wrap: anywhere;
+	}
+
+	.mailbox-bulk-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		padding: 0.5rem 0.875rem;
+		box-shadow: inset 0 -1px 0 var(--color-line);
+	}
+
+	.bulk-action-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		max-width: 100%;
+		min-height: 2.25rem;
+		padding: 0.4rem 0.75rem;
+		border-radius: 0.5rem;
+		box-shadow: inset 0 0 0 1px var(--color-line);
+		color: var(--color-text-secondary);
+		font-size: 0.8125rem;
+		text-align: left;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	.bulk-action-btn:hover:not(:disabled) {
+		background: var(--color-surface-muted);
+		color: var(--color-text);
+	}
+
+	.bulk-action-btn.danger {
+		color: var(--color-danger);
+	}
+
+	.bulk-action-btn:disabled {
+		opacity: 0.5;
+		cursor: progress;
 	}
 
 	.bulk-actions {

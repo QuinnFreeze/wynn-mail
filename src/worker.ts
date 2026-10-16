@@ -1,5 +1,7 @@
-import type { ExecutionContext } from '@cloudflare/workers-types';
+import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types';
 import { attachKvStorage } from './lib/server/kv-attachments';
+import { runMailRetention } from './lib/server/mail-retention';
+import { drainMailStorageCleanup } from './lib/server/mail-deletion';
 import {
 	handleCloudflareInbound,
 	type CloudflareInboundEnv,
@@ -17,7 +19,7 @@ const svelteApp = sveltekit as SvelteKitWorker;
 
 /**
  * SvelteKit's generated Worker is fetch-only. This wrapper keeps HTTP on
- * SvelteKit and adds Cloudflare Email Service's `email()` handler.
+ * SvelteKit and adds inbound mail and hourly, user-controlled retention.
  */
 export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
@@ -25,6 +27,14 @@ export default {
 			throw new Error('SvelteKit worker export is missing fetch');
 		}
 		return svelteApp.fetch(request, attachKvStorage(env), ctx);
+	},
+
+	async scheduled(controller: ScheduledController, env: Env) {
+		attachKvStorage(env);
+		const mail = await runMailRetention(env.DB, env.ATTACHMENTS, controller.scheduledTime);
+		const storage = await drainMailStorageCleanup(env.DB, env.ATTACHMENTS);
+		// Aggregate operational counts only: no identities, subjects or storage keys.
+		console.info(JSON.stringify({ event: 'mail-retention', ...mail, storage }));
 	},
 
 	async email(message: CloudflareInboundMessage, env: Env, ctx: ExecutionContext) {

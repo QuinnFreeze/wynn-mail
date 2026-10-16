@@ -42,6 +42,14 @@ and empty secrets must be configured before deployment. `bun run setup` only pri
 guidance; it does not create accounts, enable billing or deploy. The obsolete npm
 lock and upstream automatic R2 setup wizard are not distributed.
 
+The mailbox exposes “Mark all as read” for the current inbox category or label,
+and “Empty Trash” with a permanent-deletion confirmation. In Settings → General,
+each user can independently enable read-mail-to-Trash and Trash deletion, choosing
+3, 7, 15, 30 or a custom 1–3650 days. Both start disabled. Read-mail cleanup protects
+starred, archived, spam, draft and sent mail; Trash expiry covers everything already
+in Trash. The hourly Cron processes bounded batches and retries stored-object
+cleanup. See [retention details](docs/PRIVACY.md#user-controlled-mail-retention).
+
 ## Cost and service limits
 
 The reference architecture uses Workers Free, D1 and KV without R2 or Workers AI

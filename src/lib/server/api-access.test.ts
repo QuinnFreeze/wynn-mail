@@ -200,6 +200,25 @@ describe('API key access', () => {
 		);
 	});
 
+	test('direct permanent thread deletion requires both mail scopes, without restricting people', () => {
+		const route = { pathname: '/api/mail/message-1', method: 'DELETE' };
+		for (const authMethod of ['session', 'mobile_session'] as const) {
+			assert.deepEqual(authorizeApiRequest({ ...route, authMethod, scopes: [] }), { ok: true });
+		}
+		for (const scopes of [[], ['mail:read'], ['mail:send'], ['admin'],
+			['admin', 'mail:read'], ['admin', 'mail:send']] as const) {
+			const decision = authorizeApiRequest({ ...route, authMethod: 'api_token', scopes });
+			assert.equal(decision.ok, false);
+			if (!decision.ok) {
+				assert.equal(decision.status, 403);
+				assert.match(decision.error, /mail:read and mail:send/);
+			}
+		}
+		for (const scopes of [['mail:read', 'mail:send'], ['admin', 'mail:read', 'mail:send']] as const) {
+			assert.deepEqual(authorizeApiRequest({ ...route, authMethod: 'api_token', scopes }), { ok: true });
+		}
+	});
+
 	test('parseScopes rejects admin unless allowed', () => {
 		assert.equal(parseScopes(['mail:read', 'admin'], false), null);
 		assert.deepEqual(parseScopes(['mail:read', 'admin'], true), ['mail:read', 'admin']);

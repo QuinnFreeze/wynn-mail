@@ -25,6 +25,7 @@
 	import LabelsSettings from './LabelsSettings.svelte';
 	import AiProviderSettings from './AiProviderSettings.svelte';
 	import SocialLoginSettings from './SocialLoginSettings.svelte';
+	import MailRetentionSettings from './MailRetentionSettings.svelte';
 
 	type DeviceSession = {
 		id: string;
@@ -725,6 +726,8 @@
 			{#if signatureSaved}<p class="saved">{t('common.saved')}</p>{/if}
 		</form>
 	</section>
+
+	<MailRetentionSettings />
 	{/if}
 
 	{#if show('connections')}

@@ -12,6 +12,7 @@ import {
 	type CloudflareInboundMessage
 } from './cloudflare-inbound';
 import { createTestDb, insertTestUser } from './test-db';
+import { deleteMailMatching, drainMailStorageCleanup } from './mail-deletion';
 import { GET as downloadRaw } from '../../routes/api/emails/[id]/raw/+server';
 
 describe('inboundSender', () => {
@@ -120,7 +121,7 @@ function archiveFixture() {
 		VALUES ('address-1', 'user-1', 'domain-1', 'inbox@example.com')`).run();
 	const objects = new Map<string, Uint8Array>();
 	const reads: string[] = [];
-	const state = { failGet: false, failPut: false, puts: 0 };
+	const state = { failGet: false, failPut: false, failPutResponse: false, puts: 0 };
 	const bucket = {
 		async get(key: string) {
 			reads.push(key);
@@ -137,7 +138,11 @@ function archiveFixture() {
 			if (state.failPut) throw new Error('Storage write unavailable');
 			state.puts++;
 			objects.set(key, new Uint8Array(value).slice());
+			if (state.failPutResponse) throw new Error('Storage write response interrupted');
 			return { key };
+		},
+		async delete(key: string) {
+			objects.delete(key);
 		}
 	} as unknown as R2Bucket;
 	const pending: Promise<void>[] = [];
@@ -229,7 +234,7 @@ describe('Cloudflare original message archive', () => {
 		await f.deliver(raw);
 		const [email] = f.emails();
 		assert.equal(email.user_id, 'user-1');
-		assert.match(email.raw_storage_key!, /^raw-messages\/[a-f0-9]{64}\.eml$/);
+		assert.match(email.raw_storage_key!, /^raw-messages\/[a-f0-9-]{36}\.eml$/);
 		assert.deepEqual(f.objects.get(email.raw_storage_key!), raw);
 		const response = await f.download(email.id);
 		assert.equal(response.status, 200);
@@ -274,7 +279,7 @@ describe('Cloudflare original message archive', () => {
 		assert.deepEqual(f.objects.get(f.emails()[0].raw_storage_key!), raw);
 	});
 
-	test('retains the stable original when the email insert fails before commit', async () => {
+	test('queues an unlinked original when insertion fails and retries with a fresh generation', async () => {
 		const f = archiveFixture();
 		const raw = rawMime();
 		const interrupted = failOnce(f.db, (sql) => /INSERT INTO emails\s*\(/.test(sql));
@@ -282,27 +287,173 @@ describe('Cloudflare original message archive', () => {
 		assert.equal(f.emails().length, 0);
 		assert.equal(f.objects.size, 1);
 		const [key] = f.objects.keys();
+		assert.deepEqual(f.sqlite.query('SELECT storage_key FROM mail_storage_cleanup').all(), [{ storage_key: key }]);
+		await f.deliver(raw);
+		const currentKey = f.emails()[0].raw_storage_key!;
+		assert.notEqual(currentKey, key);
+		assert.equal(f.state.puts, 2);
+		assert.deepEqual(await drainMailStorageCleanup(f.db, f.env.ATTACHMENTS), { deleted: 1, failed: 0 });
+		assert.equal(f.objects.has(key), false);
+		assert.deepEqual(f.objects.get(currentKey), raw);
+	});
+
+	test('keeps the atomic original association when the committed insert response is lost', async () => {
+		const f = archiveFixture();
+		const raw = rawMime();
+		const interrupted = failOnce(f.db, (sql) => /INSERT INTO emails\s*\(/.test(sql), true);
+		await assert.rejects(f.deliver(raw, { ...f.env, DB: interrupted }), /D1 interrupted/);
+		assert.equal(f.emails().length, 1);
+		const key = f.emails()[0].raw_storage_key!;
+		assert.ok(key);
+		assert.deepEqual(f.objects.get(key), raw);
+		assert.deepEqual(await drainMailStorageCleanup(f.db, f.env.ATTACHMENTS), { deleted: 0, failed: 0 });
 		await f.deliver(raw);
 		assert.equal(f.emails()[0].raw_storage_key, key);
 		assert.equal(f.state.puts, 1);
 	});
 
-	for (const interruption of ['insert response', 'original association'] as const) {
-		test(`repairs ${interruption} failure before deduplicating the retry`, async () => {
+	for (const afterCommit of [false, true]) {
+		test(`repairs a historic original association failure ${afterCommit ? 'after' : 'before'} commit`, async () => {
 			const f = archiveFixture();
 			const raw = rawMime();
-			const interrupted = interruption === 'insert response'
-				? failOnce(f.db, (sql) => /INSERT INTO emails\s*\(/.test(sql), true)
-				: failOnce(f.db, (sql) => sql.startsWith('UPDATE emails SET raw_storage_key'));
+			await f.deliver(raw);
+			const emailId = f.emails()[0].id;
+			f.objects.clear();
+			f.sqlite.query('UPDATE emails SET raw_storage_key = NULL WHERE id = ?').run(emailId);
+			const interrupted = failOnce(f.db, (sql) => sql.startsWith('UPDATE emails SET raw_storage_key'), afterCommit);
 			await assert.rejects(f.deliver(raw, { ...f.env, DB: interrupted }), /D1 interrupted/);
 			assert.equal(f.emails().length, 1);
-			assert.equal(f.emails()[0].raw_storage_key, null);
+			assert.equal(f.emails()[0].raw_storage_key, afterCommit ? `raw-messages/${emailId}.eml` : null);
+			assert.equal(f.objects.size, 0);
 			await f.deliver(raw);
 			assert.equal(f.emails().length, 1);
+			assert.equal(f.emails()[0].raw_storage_key, `raw-messages/${emailId}.eml`);
 			assert.deepEqual(f.objects.get(f.emails()[0].raw_storage_key!), raw);
-			assert.equal(f.state.puts, 1);
+			assert.equal(f.state.puts, 2);
 		});
 	}
+
+	test('queues a write whose storage response was lost without accepting a parsed message', async () => {
+		const f = archiveFixture();
+		f.state.failPutResponse = true;
+		await assert.rejects(f.deliver(rawMime()), /Storage write response interrupted/);
+		assert.equal(f.emails().length, 0);
+		assert.equal(f.objects.size, 1);
+		assert.deepEqual(await drainMailStorageCleanup(f.db, f.env.ATTACHMENTS), { deleted: 1, failed: 0 });
+		assert.equal(f.objects.size, 0);
+		f.state.failPutResponse = false;
+		await f.deliver(rawMime());
+		assert.equal(f.emails().length, 1);
+	});
+
+	test('preserves a preexisting legacy storage key and its original bytes', async () => {
+		const f = archiveFixture();
+		const raw = rawMime();
+		await f.deliver(raw);
+		const legacyKey = `raw-messages/${'a'.repeat(64)}.eml`;
+		f.objects.clear();
+		f.objects.set(legacyKey, raw);
+		f.sqlite.query('UPDATE emails SET raw_storage_key = ? WHERE id = ?').run(legacyKey, f.emails()[0].id);
+		await f.deliver(rawMime({ body: new TextEncoder().encode('Later delivery') }));
+		assert.equal(f.emails()[0].raw_storage_key, legacyKey);
+		assert.deepEqual(f.objects.get(legacyKey), raw);
+		assert.equal(f.state.puts, 1);
+	});
+
+	test('redelivery during an awaited old-object deletion keeps the new generation downloadable', async () => {
+		const f = archiveFixture();
+		await f.deliver(rawMime());
+		const previous = f.emails()[0];
+		await deleteMailMatching(f.db, undefined, { where: 'e.id = ?', bindings: [previous.id] });
+		let started!: () => void;
+		let finish!: () => void;
+		const deleting = new Promise<void>((resolve) => { started = resolve; });
+		const gcBucket = {
+			async delete(key: string) {
+				started();
+				await new Promise<void>((resolve) => { finish = resolve; });
+				await f.env.ATTACHMENTS.delete(key);
+			}
+		} as unknown as R2Bucket;
+		const cleanup = drainMailStorageCleanup(f.db, gcBucket, 1);
+		await deleting;
+		const replacement = rawMime({ body: new TextEncoder().encode('New delivery generation') });
+		await f.deliver(replacement);
+		const current = f.emails()[0];
+		assert.notEqual(current.id, previous.id);
+		assert.notEqual(current.raw_storage_key, previous.raw_storage_key);
+		finish();
+		assert.deepEqual(await cleanup, { deleted: 1, failed: 0 });
+		assert.equal(f.objects.has(previous.raw_storage_key!), false);
+		const downloaded = await f.download(current.id);
+		assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()), replacement);
+	});
+
+	test('requeues a historic original written after its row and first GC attempt were removed', async () => {
+		const f = archiveFixture();
+		const raw = rawMime();
+		await f.deliver(raw);
+		const emailId = f.emails()[0].id;
+		f.objects.clear();
+		f.sqlite.query('UPDATE emails SET raw_storage_key = NULL WHERE id = ?').run(emailId);
+		const racingBucket = {
+			get: f.env.ATTACHMENTS.get.bind(f.env.ATTACHMENTS),
+			async put(key: string, value: Uint8Array) {
+				await deleteMailMatching(f.db, undefined, { where: 'e.id = ?', bindings: [emailId] });
+				await drainMailStorageCleanup(f.db, f.env.ATTACHMENTS);
+				return f.env.ATTACHMENTS.put(key, value);
+			}
+		} as unknown as R2Bucket;
+		await assert.rejects(f.deliver(raw, { ...f.env, ATTACHMENTS: racingBucket }), /removed while archiving/);
+		assert.equal(f.emails().length, 0);
+		assert.deepEqual([...f.objects.keys()], [`raw-messages/${emailId}.eml`]);
+		assert.deepEqual(await drainMailStorageCleanup(f.db, f.env.ATTACHMENTS), { deleted: 1, failed: 0 });
+		assert.equal(f.objects.size, 0);
+	});
+
+	test('keeps a late-write cleanup claim when an older object-delete response finishes later', async () => {
+		const f = archiveFixture();
+		const raw = rawMime();
+		await f.deliver(raw);
+		const emailId = f.emails()[0].id;
+		f.objects.clear();
+		f.sqlite.query('UPDATE emails SET raw_storage_key = NULL WHERE id = ?').run(emailId);
+		let started!: () => void;
+		let finish!: () => void;
+		const deletionStarted = new Promise<void>((resolve) => { started = resolve; });
+		let oldCleanup: Promise<{ deleted: number; failed: number }> | undefined;
+		let oldGeneration: string | undefined;
+		const responseDelayedBucket = {
+			async delete(key: string) {
+				// The object is gone, but the caller has not received its response.
+				f.objects.delete(key);
+				started();
+				await new Promise<void>((resolve) => { finish = resolve; });
+			}
+		} as unknown as R2Bucket;
+		const racingBucket = {
+			get: f.env.ATTACHMENTS.get.bind(f.env.ATTACHMENTS),
+			async put(key: string, value: Uint8Array) {
+				await deleteMailMatching(f.db, undefined, { where: 'e.id = ?', bindings: [emailId] });
+				oldGeneration = String(f.sqlite.query('SELECT generation FROM mail_storage_cleanup').all()[0].generation);
+				oldCleanup = drainMailStorageCleanup(f.db, responseDelayedBucket);
+				await deletionStarted;
+				return f.env.ATTACHMENTS.put(key, value);
+			}
+		} as unknown as R2Bucket;
+		await assert.rejects(f.deliver(raw, { ...f.env, ATTACHMENTS: racingBucket }), /removed while archiving/);
+		const requeued = f.sqlite.query('SELECT generation FROM mail_storage_cleanup').all()[0];
+		assert.match(oldGeneration ?? '', /^[a-f0-9]{32}$/);
+		assert.match(String(requeued.generation), /^[a-f0-9]{32}$/);
+		assert.notEqual(requeued.generation, oldGeneration);
+		finish();
+		await oldCleanup;
+		assert.equal(f.objects.size, 1);
+		assert.deepEqual(f.sqlite.query('SELECT storage_key FROM mail_storage_cleanup').all(),
+			[{ storage_key: `raw-messages/${emailId}.eml` }]);
+		assert.deepEqual(await drainMailStorageCleanup(f.db, f.env.ATTACHMENTS), { deleted: 1, failed: 0 });
+		assert.equal(f.objects.size, 0);
+	});
 
 	test('preserves the first archived delivery and repairs missing objects on retry', async () => {
 		const f = archiveFixture();
