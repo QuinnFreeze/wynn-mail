@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { formatRelativeDate } from '$lib/utils/date';
 	import { runMailAction } from '$lib/mail/client';
+	import { MAILBOX_DATA_DEPENDENCY } from '$lib/mail/sync';
 	import { initials, participantName } from '$lib/mail/folders';
 	import { INBOX_CATEGORIES, categoryNavKey, categoryUnread } from '$lib/mail/categories';
 	import { t } from '$lib/i18n';
@@ -30,7 +31,7 @@
 	} = $props();
 
 	let selected = $state<string[]>([]);
-	let items = $state<ThreadSummary[]>([]);
+	let items = $state<ThreadSummary[]>(untrack(() => mailbox.threads));
 	let refreshing = $state(false);
 	let busy = $state(false);
 	let actionError = $state('');
@@ -81,12 +82,13 @@
 	}
 
 	function markThreadRead(threadId: string) {
+		if (!items.some((thread) => thread.thread_id === threadId && !thread.is_read)) return;
 		items = filters.unreadOnly
 			? items.filter((thread) => thread.thread_id !== threadId)
 			: items.map((thread) =>
 					thread.thread_id === threadId ? { ...thread, is_read: true } : thread
 				);
-		void invalidateAll();
+		void invalidate(MAILBOX_DATA_DEPENDENCY);
 	}
 
 	function setChip(next: 'all' | 'unread' | 'starred') {
@@ -144,7 +146,7 @@
 	async function refresh() {
 		refreshing = true;
 		try {
-			await invalidateAll();
+			await invalidate(MAILBOX_DATA_DEPENDENCY);
 		} finally {
 			window.setTimeout(() => {
 				refreshing = false;
@@ -164,7 +166,7 @@
 				selected = [];
 				if (threadId) await setThread(null);
 			}
-			await invalidateAll();
+			await invalidate(MAILBOX_DATA_DEPENDENCY);
 			if (action === 'read-all' || action === 'empty-trash') {
 				actionStatus = t('mailbox.bulkDone', { count: result.affected ?? 0 });
 			}

@@ -1,8 +1,10 @@
 export const MAIL_CHANGED_MESSAGE = 'mail:changed';
+/** The mail list, reader and sidebar share this explicit SvelteKit dependency. */
+export const MAILBOX_DATA_DEPENDENCY = 'app:mail';
 export const MAILBOX_SYNC_PATH = '/api/mail/sync';
-/** Stay under the Workers HTTP wall-clock limit so the hold can finish cleanly. */
+/** Bound each held request so it can finish and reconnect regularly. */
 export const MAILBOX_SYNC_HOLD_MS = 20_000;
-export const MAILBOX_SYNC_TICK_MS = 1_000;
+export const MAILBOX_SYNC_TICK_MS = 5_000;
 export const MAILBOX_SYNC_RETRY_MS = 2_000;
 
 export function mailboxSyncUrl(cursor: string | null): string {

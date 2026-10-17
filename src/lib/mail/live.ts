@@ -1,6 +1,7 @@
 import {
 	isMailChangedMessage,
 	MAIL_CHANGED_MESSAGE,
+	MAILBOX_DATA_DEPENDENCY,
 	MAILBOX_SYNC_RETRY_MS,
 	mailboxSyncUrl,
 	readMailboxCursor,
@@ -71,11 +72,12 @@ function waitUntilVisible(signal: AbortSignal): Promise<void> {
  * Keep the open mailbox in sync with inbound delivery. Long-polls a cursor,
  * pauses in background tabs, and wakes immediately on a push message.
  */
-export function startMailboxLiveSync(invalidate: () => Promise<void>): () => void {
+export function startMailboxLiveSync(invalidate: (dependency: string) => Promise<void>): () => void {
 	if (typeof document === 'undefined') return () => {};
 
 	const lifecycle = new AbortController();
 	let poll: AbortController | null = null;
+	let pushPending = false;
 
 	const stopPoll = () => {
 		poll?.abort();
@@ -96,24 +98,32 @@ export function startMailboxLiveSync(invalidate: () => Promise<void>): () => voi
 				continue;
 			}
 
-			poll = new AbortController();
-			const onLifecycleAbort = () => poll?.abort();
+			const currentPoll = new AbortController();
+			poll = currentPoll;
+			const onLifecycleAbort = () => currentPoll.abort();
 			lifecycle.signal.addEventListener('abort', onLifecycleAbort);
 
 			try {
-				const result = await fetchMailboxCursor(cursor, poll.signal);
+				const result = await fetchMailboxCursor(cursor, currentPoll.signal);
+				if (currentPoll.signal.aborted) continue;
 				switch (result.kind) {
-					case 'ok':
-						if (shouldRefreshMailbox(cursor, result.cursor)) {
+					case 'ok': {
+						// A push during bootstrap must not disappear into the first
+						// cursor snapshot, which normally does not refresh the page.
+						const refresh = shouldRefreshMailbox(cursor, result.cursor) ||
+							(cursor === null && pushPending);
+						pushPending = false;
+						if (refresh) {
 							cursor = result.cursor;
-							await invalidate();
+							await invalidate(MAILBOX_DATA_DEPENDENCY);
 							window.dispatchEvent(new Event(MAIL_CHANGED_MESSAGE));
 						} else {
 							cursor = result.cursor;
 						}
 						break;
+					}
 					case 'retry':
-						await waitForAbortable(MAILBOX_SYNC_RETRY_MS, poll.signal);
+						await waitForAbortable(MAILBOX_SYNC_RETRY_MS, currentPoll.signal);
 						break;
 					case 'stop':
 						await new Promise<void>((resolve) => {
@@ -131,12 +141,12 @@ export function startMailboxLiveSync(invalidate: () => Promise<void>): () => voi
 				}
 			} catch (error) {
 				if (lifecycle.signal.aborted) return;
-				if (!isAbortError(error)) {
-					await waitForAbortable(MAILBOX_SYNC_RETRY_MS, lifecycle.signal);
+				if (!isAbortError(error) && !currentPoll.signal.aborted) {
+					await waitForAbortable(MAILBOX_SYNC_RETRY_MS, currentPoll.signal);
 				}
 			} finally {
 				lifecycle.signal.removeEventListener('abort', onLifecycleAbort);
-				poll = null;
+				if (poll === currentPoll) poll = null;
 			}
 		}
 	};
@@ -155,6 +165,7 @@ export function startMailboxLiveSync(invalidate: () => Promise<void>): () => voi
 
 	const onMessage = (event: MessageEvent) => {
 		if (!isMailChangedMessage(event.data)) return;
+		pushPending = true;
 		stopPoll();
 	};
 	navigator.serviceWorker?.addEventListener('message', onMessage);

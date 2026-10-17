@@ -8,6 +8,8 @@ import {
 } from './constants';
 import { createSessionToken, hashPassword, hashToken, verifyPassword } from './crypto';
 import type { User } from '$lib/types';
+import { DEFAULT_UI_THEME, isThemeId } from '$lib/ui-theme/ids';
+import { parseLocale, type Locale } from '$lib/i18n/locales';
 
 export const MAX_AUTH_BODY_BYTES = 16_384;
 
@@ -764,7 +766,16 @@ export type AuthenticatedSession = {
 	user: User;
 	sessionId: string;
 	isMobile: boolean;
+	/** Request-scoped metadata from the same authoritative user lookup. */
+	preferences: SessionPreferences;
 };
+
+export type SessionPreferences = { uiTheme: string; locale: Locale };
+
+/** Keep presentation metadata separate from the public User DTO. */
+export function sessionPreferencesFromRow(row: { ui_theme?: string | null; locale?: string | null }): SessionPreferences {
+	return { uiTheme: isThemeId(row.ui_theme) ? row.ui_theme : DEFAULT_UI_THEME, locale: parseLocale(row.locale) };
+}
 
 /**
  * Resolve a raw credential to its user and opaque database session id. The raw
@@ -781,14 +792,15 @@ export async function getAuthenticatedSession(
 	const row = await db
 		.prepare(
 			`SELECT s.id AS session_id, s.device_platform, s.last_seen_at,
-			        u.id, u.email, u.name, u.is_admin, u.must_change_password, u.created_at
+				        u.id, u.email, u.name, u.is_admin, u.must_change_password, u.created_at,
+				        u.ui_theme, u.locale
 			 FROM sessions s
 			 JOIN users u ON u.id = s.user_id
 			 WHERE s.token_hash = ? AND datetime(s.expires_at) > datetime('now')`
 		)
 		.bind(token_hash)
 		.first<
-			UserRow & { session_id: string; device_platform: string | null; last_seen_at: string | null }
+			UserRow & { session_id: string; device_platform: string | null; last_seen_at: string | null; ui_theme: string | null; locale: string | null }
 		>();
 
 	if (!row) return null;
@@ -814,7 +826,8 @@ export async function getAuthenticatedSession(
 	return {
 		user: mapUser(row),
 		sessionId: row.session_id,
-		isMobile: Boolean(row.device_platform)
+		isMobile: Boolean(row.device_platform),
+		preferences: sessionPreferencesFromRow(row)
 	};
 }
 

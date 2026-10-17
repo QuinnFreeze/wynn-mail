@@ -1,6 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Cookies } from '@sveltejs/kit';
-import { sessionCookieOptions } from './auth';
+import { sessionCookieOptions, sessionPreferencesFromRow, type SessionPreferences } from './auth';
 import { LINKED_SESSIONS_COOKIE, MAX_LINKED_ACCOUNTS, SESSION_DAYS } from './constants';
 import { hashToken } from './crypto';
 import type { LinkedAccount, User } from '$lib/types';
@@ -18,6 +18,7 @@ export type ResolvedSession = {
 	token: string;
 	sessionId: string;
 	user: User;
+	preferences: SessionPreferences;
 	/** Default sending address, for the switcher label. */
 	address: string | null;
 };
@@ -32,6 +33,8 @@ type SessionRow = {
 	must_change_password: number;
 	created_at: string;
 	address: string | null;
+	ui_theme: string | null;
+	locale: string | null;
 };
 
 /** Cookie → tokens. Tolerates garbage, dedupes, and caps the count. */
@@ -98,6 +101,7 @@ export async function resolveLinkedSessions(
 		.prepare(
 			`SELECT s.token_hash, s.id AS session_id,
 			        u.id, u.email, u.name, u.is_admin, u.must_change_password, u.created_at,
+			        u.ui_theme, u.locale,
 			        (SELECT a.address FROM addresses a
 			          WHERE a.user_id = u.id
 			          ORDER BY a.is_default DESC, a.address ASC
@@ -122,6 +126,7 @@ export async function resolveLinkedSessions(
 			token,
 			sessionId: row.session_id,
 			address: row.address,
+			preferences: sessionPreferencesFromRow(row),
 			user: {
 				id: row.id,
 				email: row.email,
@@ -136,9 +141,9 @@ export async function resolveLinkedSessions(
 }
 
 /** Shape the switcher renders: the active account first, then the parked ones. */
-export function toLinkedAccounts(
+export function toLinkedAccounts<T extends { user: User; address: string | null }>(
 	current: { user: User; address: string | null } | null,
-	others: ResolvedSession[]
+	others: T[]
 ): LinkedAccount[] {
 	const accounts: LinkedAccount[] = [];
 	if (current) {

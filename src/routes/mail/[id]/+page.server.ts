@@ -4,9 +4,11 @@ import { getEmailForUser, listThreadMessages, markThreadRead } from '$lib/server
 import { resolveReplyFromAddress } from '$lib/server/outbox';
 import { displaySubject } from '$lib/server/threads';
 import { listAddressesForUser } from '$lib/server/domains';
+import { MAILBOX_DATA_DEPENDENCY } from '$lib/mail/sync';
 	import { folderPath, mailboxViewForEmail } from '$lib/mail/folders';
 
-export const load: PageServerLoad = async ({ params, locals, platform }) => {
+export const load: PageServerLoad = async ({ params, locals, platform, depends }) => {
+	depends(MAILBOX_DATA_DEPENDENCY);
 	if (!locals.user || !platform?.env.DB) {
 		throw error(401, 'Unauthorized');
 	}

@@ -9,7 +9,8 @@ import {
 	readSessionToken,
 	sessionCookieOptions,
 	SESSION_COOKIE,
-	type AuthenticatedSession
+	type AuthenticatedSession,
+	type SessionPreferences
 } from '$lib/server/auth';
 import { readLinkedTokens, resolveLinkedSessions, toLinkedAccounts, writeLinkedTokens } from '$lib/server/accounts';
 import {
@@ -20,8 +21,6 @@ import {
 } from '$lib/server/constants';
 import { listAddressesForUser, listDomains } from '$lib/server/domains';
 import { loginHref, safeNextPath } from '$lib/next-url';
-import { getUserLocale } from '$lib/server/locale';
-import { getUserUiTheme } from '$lib/server/ui-theme';
 import { BUILTIN_THEME_IDS, DEFAULT_UI_THEME, parseThemeId } from '$lib/ui-theme/ids';
 import {
 	DEFAULT_LOCALE,
@@ -44,6 +43,14 @@ const PUBLIC_PREFIXES = [
 
 function isPublicPath(pathname: string): boolean {
 	return PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+/** Only these API handlers consume the selected-domain context. API handlers
+ * do not render the switcher and never need its owned-address inventory. */
+function needsApiDomainContext(pathname: string, method: string): boolean {
+	return (pathname === '/api/mail' && method === 'GET')
+		|| (pathname === '/api/mail/actions' && method === 'POST')
+		|| (pathname === '/api/domains/select' && method === 'POST');
 }
 
 /**
@@ -85,19 +92,28 @@ function jsonError(error: string, status: number): Response {
 	});
 }
 
-function render(
+async function render(
 	event: Parameters<Handle>[0]['event'],
 	resolve: Parameters<Handle>[0]['resolve']
-): ReturnType<Handle> {
+): Promise<Response> {
 	const uiTheme = event.locals.uiTheme || DEFAULT_UI_THEME;
 	const locale = event.locals.locale || DEFAULT_LOCALE;
-	return resolve(event, {
+	const response = await resolve(event, {
 		transformPageChunk: ({ html }) =>
 			html.replace(
 				'<html lang="en">',
 				`<html lang="${locale}" data-ui-theme="${uiTheme}">`
 			)
 	});
+	// Authenticated SSR can contain message previews. Apply this only to HTML;
+	// API/data responses keep their route or framework cache policy.
+	if (!event.locals.user || event.url.pathname.startsWith('/api/') ||
+		response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'text/html') {
+		return response;
+	}
+	const headers = new Headers(response.headers);
+	headers.set('Cache-Control', 'private, no-store');
+	return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
@@ -130,6 +146,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.locale =
 		matchLocale(event.cookies.get(LOCALE_COOKIE)) ??
 		localeFromAcceptLanguage(event.request.headers.get('accept-language'));
+	let browserPreferences: SessionPreferences | null = null;
 
 	if (isMcpPath(pathname)) {
 		if (event.request.method === 'OPTIONS') {
@@ -163,7 +180,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 						next.token,
 						sessionCookieOptions(SESSION_DAYS * 24 * 60 * 60, event.url)
 					);
-					cookieSession = { user: next.user, sessionId: next.sessionId, isMobile: false };
+					cookieSession = { user: next.user, sessionId: next.sessionId, isMobile: false, preferences: next.preferences };
 				}
 			}
 
@@ -185,6 +202,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 			event.locals.user = cookieSession.user;
 			event.locals.currentSessionId = cookieSession.sessionId;
 			event.locals.authMethod = 'session';
+			browserPreferences = cookieSession.preferences;
 		} else if (pathname.startsWith('/api/')) {
 			const bearer = readBearerToken(event.request);
 			if (bearer) {
@@ -222,10 +240,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 		if (event.locals.user.must_change_password) {
 			event.locals.domains = [];
 			event.locals.addresses = [];
-		} else {
+		} else if (!pathname.startsWith('/api/') || needsApiDomainContext(pathname, event.request.method)) {
 			const [domains, addresses] = await Promise.all([
 				listDomains(db),
-				listAddressesForUser(db, event.locals.user.id)
+				pathname.startsWith('/api/') ? [] : listAddressesForUser(db, event.locals.user.id)
 			]);
 
 			event.locals.domains = domains;
@@ -285,11 +303,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 		return render(event, resolve);
 	}
 
-	if (db && event.locals.user && !event.locals.user.must_change_password) {
-		const [storedTheme, storedLocale] = await Promise.all([
-			getUserUiTheme(db, event.locals.user.id),
-			getUserLocale(db, event.locals.user.id)
-		]);
+	if (browserPreferences && event.locals.user && !event.locals.user.must_change_password) {
+		const { uiTheme: storedTheme, locale: storedLocale } = browserPreferences;
 		event.locals.uiTheme = storedTheme;
 		event.locals.locale = storedLocale;
 		if (event.cookies.get(UI_THEME_COOKIE) !== storedTheme) {
@@ -310,7 +325,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 		}
 	}
 
-	const needsSetup = db ? (await countUsers(db)) === 0 : false;
+	// A live session joined to its user already proves initialization completed.
+	const needsSetup = db && !event.locals.user ? (await countUsers(db)) === 0 : false;
 
 	if (
 		needsSetup &&

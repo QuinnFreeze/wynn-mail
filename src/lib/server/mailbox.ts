@@ -1,5 +1,6 @@
 import { listMailbox } from './mail-store';
 import { mailboxCategoryFilter, parseInboxCategory } from '$lib/mail/categories';
+import { MAILBOX_DATA_DEPENDENCY } from '$lib/mail/sync';
 import type { MailboxFilters, MailboxPage, MailboxView } from '$lib/types';
 import type { D1Database } from '@cloudflare/workers-types';
 
@@ -23,8 +24,10 @@ export async function loadMailbox(
 	userId: string | undefined,
 	view: MailboxView,
 	url: URL,
-	domainId: string | null
+	domainId: string | null,
+	depends?: (...dependencies: string[]) => void
 ): Promise<{ view: MailboxView; mailbox: MailboxPage; filters: MailboxFilters }> {
+	depends?.(MAILBOX_DATA_DEPENDENCY);
 	const filters = readFilters(url);
 
 	if (!db || !userId) {

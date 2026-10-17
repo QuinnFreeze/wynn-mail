@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { page } from '$app/stores';
-	import { invalidateAll } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
 	import EmailBody from '$lib/components/EmailBody.svelte';
 	import { resolveInlineImages, visibleAttachments } from '$lib/utils/inline-images';
 	import RichTextEditor from '$lib/components/RichTextEditor.svelte';
@@ -10,7 +10,7 @@
 	import { formatMailDate, formatMailTime, shouldShowSeparateTime } from '$lib/utils/date';
 	import { attachmentHref } from '$lib/utils/attachments';
 	import { runMailAction } from '$lib/mail/client';
-	import { MAIL_CHANGED_MESSAGE } from '$lib/mail/sync';
+	import { MAIL_CHANGED_MESSAGE, MAILBOX_DATA_DEPENDENCY } from '$lib/mail/sync';
 	import { initials, parseAddressList, type AddressPart } from '$lib/mail/folders';
 	import { INBOX_CATEGORIES, categoryNavKey } from '$lib/mail/categories';
 	import { t } from '$lib/i18n';
@@ -85,7 +85,7 @@
 			thread = null;
 			return;
 		}
-		let cancelled = false;
+		let request: AbortController | null = null;
 		loading = true;
 		error = '';
 		replyOpen = false;
@@ -93,13 +93,22 @@
 		menuFor = null;
 
 		const load = (resetUi: boolean) => {
-			if (resetUi) loading = true;
-			return fetch(`/api/mail/${current}`)
+			// A mail notification can replace an unfinished initial request.
+			// Keep its error/loading semantics, including during thread switches.
+			const initial = resetUi || untrack(() => loading || !thread || Boolean(error));
+			request?.abort();
+			const currentRequest = new AbortController();
+			request = currentRequest;
+			if (initial) {
+				loading = true;
+				error = '';
+			}
+			return fetch(`/api/mail/${current}`, { signal: currentRequest.signal })
 				.then(async (response) => {
 					const body = (await response.json()) as ThreadPayload & { error?: string };
-					if (cancelled) return;
+					if (currentRequest.signal.aborted) return;
 					if (!response.ok) {
-						if (resetUi) {
+						if (initial) {
 							error = body.error ?? t('thread.couldNotLoad');
 							thread = null;
 						}
@@ -107,18 +116,21 @@
 					}
 					thread = body;
 					const last = body.messages[body.messages.length - 1];
-					if (resetUi) {
+					if (initial) {
 						opened = new Set(last ? [last.id] : []);
+						onRead?.(body.threadId);
 					} else if (last) {
 						opened = new Set([...untrack(() => opened), last.id]);
 					}
-					onRead?.(body.threadId);
 				})
 				.catch(() => {
-					if (!cancelled && resetUi) error = t('common.networkError');
+					if (!currentRequest.signal.aborted && initial) error = t('common.networkError');
 				})
 				.finally(() => {
-					if (!cancelled) loading = false;
+					if (request === currentRequest) {
+						if (!currentRequest.signal.aborted) loading = false;
+						request = null;
+					}
 				});
 		};
 
@@ -130,7 +142,8 @@
 		window.addEventListener(MAIL_CHANGED_MESSAGE, onMailChanged);
 
 		return () => {
-			cancelled = true;
+			request?.abort();
+			request = null;
 			window.removeEventListener(MAIL_CHANGED_MESSAGE, onMailChanged);
 		};
 	});
@@ -262,7 +275,7 @@
 		menuFor = null;
 		await runMailAction(action, [latest.id], extra);
 		onClose();
-		await invalidateAll();
+		await invalidate(MAILBOX_DATA_DEPENDENCY);
 	}
 
 	async function toggleLabel(labelId: string) {
@@ -278,7 +291,7 @@
 				body: JSON.stringify({ labelIds: next })
 			});
 			if (!response.ok) return;
-			await invalidateAll();
+			await invalidate(MAILBOX_DATA_DEPENDENCY);
 			if (thread) {
 				const selected = allLabels.filter((label) => next.includes(label.id));
 				thread = {
@@ -294,7 +307,7 @@
 	async function toggleStar() {
 		if (!latest) return;
 		await runMailAction(starred ? 'unstar' : 'star', [latest.id]);
-		await invalidateAll();
+		await invalidate(MAILBOX_DATA_DEPENDENCY);
 		if (thread) {
 			thread = {
 				...thread,
@@ -452,7 +465,7 @@
 			replyOpen = false;
 			replyHtml = '';
 			attachments = [];
-			await invalidateAll();
+			await invalidate(MAILBOX_DATA_DEPENDENCY);
 		} catch {
 			sendError = t('common.networkError');
 		} finally {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { page as currentPage } from '$app/stores';
 	import Icon from './Icon.svelte';
 	import Check from './Check.svelte';
@@ -12,6 +12,7 @@
 	import { haptic, isPrimaryTab } from '$lib/app-chrome';
 	import { INBOX_CATEGORIES, categoryNavKey, categoryUnread } from '$lib/mail/categories';
 	import { runMailAction } from '$lib/mail/client';
+	import { MAILBOX_DATA_DEPENDENCY } from '$lib/mail/sync';
 	import { plural, t } from '$lib/i18n';
 	import type {
 		MailAddress,
@@ -71,7 +72,7 @@
 	}
 
 	// Local copy so stars and reads can flip before the server round trip lands.
-	let items = $state<ThreadSummary[]>([]);
+	let items = $state<ThreadSummary[]>(untrack(() => mailbox.threads));
 	let selected = $state<string[]>([]);
 	let busy = $state(false);
 	let actionError = $state('');
@@ -160,6 +161,10 @@
 		selectMenuOpen = false;
 	}
 
+	function refreshMailbox() {
+		return invalidate(MAILBOX_DATA_DEPENDENCY);
+	}
+
 	/** One entry point for every list action, so the UI always refreshes after. */
 	async function run(action: string, ids: string[] = selected, extra: Record<string, unknown> = {}) {
 		if (busy) return;
@@ -170,7 +175,7 @@
 		try {
 			const result = await runMailAction(action, ids, extra);
 			selected = [];
-			await invalidateAll();
+			await refreshMailbox();
 			if (action === 'read-all' || action === 'empty-trash') {
 				actionStatus = t('mailbox.bulkDone', { count: result.affected ?? 0 });
 			}
@@ -248,7 +253,7 @@
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ isStarred })
 		});
-		await invalidateAll();
+		await refreshMailbox();
 	}
 
 	/** Builds a URL for this mailbox with some query params changed. */
@@ -278,7 +283,7 @@
 	const rangeEnd = $derived(Math.min(mailbox.page * mailbox.pageSize, mailbox.total));
 </script>
 
-<PullToRefresh onRefresh={invalidateAll}>
+<PullToRefresh onRefresh={refreshMailbox}>
 <section class="mailbox" data-view={view} class:selecting class:primary-tab={hideMailboxTitle}>
 	<header class="toolbar">
 		<div class="toolbar-left">
@@ -599,7 +604,7 @@
 									<Icon name="mail-open-line" size={15} /> {t('mailbox.markAllRead')}
 								</button>
 							{/if}
-							<button type="button" class="menu-item" onclick={() => invalidateAll()}>
+							<button type="button" class="menu-item" onclick={refreshMailbox}>
 								<Icon name="refresh-line" size={15} /> {t('common.refresh')}
 							</button>
 							{#if view === 'trash'}
@@ -859,6 +864,8 @@
 						<a
 							class="row-link"
 							href={href(thread)}
+							data-sveltekit-preload-data="off"
+							data-sveltekit-preload-code="hover"
 							onclick={(event) => {
 								if (longPressFired || selecting) {
 									event.preventDefault();

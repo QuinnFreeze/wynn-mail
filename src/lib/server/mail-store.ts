@@ -1058,7 +1058,7 @@ export async function markThreadRead(
 	await db
 		.prepare(
 			`UPDATE emails SET is_read = 1
-			 WHERE user_id = ? AND COALESCE(thread_id, id) = ? AND deleted_at IS NULL`
+			 WHERE user_id = ? AND COALESCE(thread_id, id) = ? AND deleted_at IS NULL AND is_read = 0`
 		)
 		.bind(userId, email.thread_id ?? email.id)
 		.run();

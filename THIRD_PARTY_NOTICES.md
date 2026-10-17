@@ -18,6 +18,12 @@ Official sources: [Zero license](https://github.com/Mail-0/Zero/blob/843dc54969d
 
 This project uses `remixicon` version 4.9.1 for functional interface icons and provider identification. The controlling file shipped with that version is **Remix Icon License v1.0, January 2026**, Copyright (c) 2017–2026 Remix Design. A verbatim copy is included in [licenses/Remix-Icon-License-v1.0.txt](licenses/Remix-Icon-License-v1.0.txt).
 
+The interface uses a generated WOFF subset (`src/lib/assets/remixicon-subset.woff`)
+and matching CSS containing the glyphs referenced by this application. Glyph
+outlines and code points are unchanged. `scripts/build-icon-subset.py` regenerates
+these assets from the installed package; normal builds verify the checked-in
+subset and do not require Python. The font and CSS retain the Remix license.
+
 The package's `package.json` reports `Apache-2.0`, but its actual `License` file and the official `v4.9.1` tag contain the custom license above. This project therefore does not represent those assets as Apache-2.0 or MIT.
 
 That license allows icons as components of larger applications, including MIT-licensed applications, subject to its terms. Its restrictions include standalone icon sales, competing icon libraries, and using the icons as a product's logo or brand identity. Third-party brand icons may only represent or link to the corresponding brand and grant no trademark rights. Consult the complete license before reusing icons outside this application's functional interface.

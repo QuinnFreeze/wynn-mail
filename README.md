@@ -36,6 +36,11 @@ bun run check
 bun run build
 ```
 
+Interface icons use a checked-in font subset. Builds verify that source icon
+names and the subset agree. If adding icons, regenerate it with
+`python3 scripts/build-icon-subset.py` (maintainer-only FontTools dependency);
+normal builds use the checked-in font assets and do not require Python.
+
 Follow [the deployment guide](docs/DEPLOYMENT.md) for your own resources, domain,
 providers and optional OAuth clients. Zero resource IDs, empty domain/origin values
 and empty secrets must be configured before deployment. `bun run setup` only prints

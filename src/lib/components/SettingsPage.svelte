@@ -137,12 +137,24 @@
 	}
 
 	let signature = $state(untrack(() => data.signature));
+	let signatureSource = $state(untrack(() => data.signature));
 	let signatureBusy = $state(false);
 	let signatureError = $state('');
 	let signatureSaved = $state(false);
+	$effect(() => {
+		if (!show('general')) return;
+		const next = data.signature;
+		const previous = untrack(() => signatureSource);
+		if (next !== previous) {
+			if (untrack(() => signature) === previous) signature = next;
+			signatureSource = next;
+			signatureSaved = false;
+		}
+	});
 
 	async function saveSignature(event: SubmitEvent) {
 		event.preventDefault();
+		const submittedSignature = signature;
 		signatureBusy = true;
 		signatureError = '';
 		signatureSaved = false;
@@ -151,7 +163,7 @@
 			const res = await fetch('/api/settings/signature', {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ signature })
+				body: JSON.stringify({ signature: submittedSignature })
 			});
 			const body = await res.json();
 			if (!res.ok) {
@@ -159,8 +171,11 @@
 				return;
 			}
 
-			signature = body.signature;
-			signatureSaved = true;
+			if (signature === submittedSignature) {
+				signature = body.signature;
+				signatureSaved = true;
+			}
+			signatureSource = body.signature;
 		} catch {
 			signatureError = t('common.networkError');
 		} finally {
@@ -183,12 +198,14 @@
 	let sendScope = $state(true);
 	let readScope = $state(true);
 	let adminScope = $state(false);
-	let tokens = $state<ApiTokenSummary[]>([]);
-	let hydrated = $state(false);
+	let tokens = $state<ApiTokenSummary[]>(untrack(() => data.apiTokens));
+	let tokenSource = $state.raw<ApiTokenSummary[] | null>(null);
 	$effect(() => {
-		if (!hydrated) {
-			tokens = data.apiTokens;
-			hydrated = true;
+		if (!show('connections')) return;
+		const next = data.apiTokens;
+		if (next !== untrack(() => tokenSource)) {
+			tokens = next;
+			tokenSource = next;
 		}
 	});
 	let keyBusy = $state(false);
@@ -208,7 +225,16 @@
 	const mcpUrl = $derived(`${$page.url.origin}/mcp`);
 	let mcpCopied = $state(false);
 	let editedApps = $state<ConnectedApp[] | null>(null);
+	let appSource = $state.raw<ConnectedApp[] | null>(null);
 	const connectedApps = $derived(editedApps ?? data.connectedApps);
+	$effect(() => {
+		if (!show('connections')) return;
+		const next = data.connectedApps;
+		if (next !== untrack(() => appSource)) {
+			editedApps = null;
+			appSource = next;
+		}
+	});
 	let disconnectingApp = $state('');
 	let appError = $state('');
 
@@ -443,6 +469,15 @@
 	// ---- Connected devices --------------------------------------------------
 
 	let devices = $state<DeviceSession[]>(untrack(() => data.devices ?? []));
+	let deviceSource = $state.raw<DeviceSession[] | null>(null);
+	$effect(() => {
+		if (!show('connections')) return;
+		const next = data.devices;
+		if (next !== untrack(() => deviceSource)) {
+			devices = next;
+			deviceSource = next;
+		}
+	});
 	let pairingPanelOpen = $state(false);
 	let pairingCode = $state('');
 	let pairingExpiresAt = $state('');
@@ -709,6 +744,7 @@
 			<textarea
 				id="email-signature"
 				bind:value={signature}
+				oninput={() => { signatureSaved = false; }}
 				maxlength={MAX_EMAIL_SIGNATURE_LENGTH}
 				rows="3"
 				placeholder={'Best,\nEmmanuel'}

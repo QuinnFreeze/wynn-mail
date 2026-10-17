@@ -3,12 +3,50 @@ import { test } from 'node:test';
 import {
 	isMailChangedMessage,
 	MAIL_CHANGED_MESSAGE,
+	MAILBOX_DATA_DEPENDENCY,
+	MAILBOX_SYNC_HOLD_MS,
 	MAILBOX_SYNC_PATH,
+	MAILBOX_SYNC_TICK_MS,
 	mailboxSyncUrl,
 	readMailboxCursor,
 	shouldRefreshMailbox,
 	waitForAbortable
 } from './sync';
+import { loadMailbox } from '../server/mailbox';
+import { createTestDb, insertTestUser } from '../server/test-db';
+
+test('mail polling holds for twenty seconds with five-second database checks', () => {
+	assert.equal(MAILBOX_SYNC_HOLD_MS, 20_000);
+	assert.equal(MAILBOX_SYNC_TICK_MS, 5_000);
+	assert.equal(MAILBOX_SYNC_HOLD_MS / MAILBOX_SYNC_TICK_MS, 4);
+});
+
+test('mailbox loads explicitly register the mail dependency without requiring a database', async () => {
+	const dependencies: string[] = [];
+	const result = await loadMailbox(undefined, undefined, 'inbox', new URL('https://mail.example.test/inbox'),
+		null, (...keys) => dependencies.push(...keys));
+	assert.deepEqual(dependencies, [MAILBOX_DATA_DEPENDENCY]);
+	assert.equal(result.mailbox.total, 0);
+	await loadMailbox(undefined, undefined, 'inbox', new URL('https://mail.example.test/inbox'), null);
+});
+
+test('registered mailbox loads retain ownership and filter behavior', async () => {
+	const { db, sqlite } = createTestDb();
+	insertTestUser(sqlite);
+	insertTestUser(sqlite, 'other');
+	sqlite.query(`INSERT INTO emails (id,user_id,direction,from_addr,to_addr,subject,category)
+		VALUES ('visible','user-1','inbound','sender@example.net','user-1@example.com','Synthetic','social'),
+		('foreign','other','inbound','sender@example.net','other@example.com','Synthetic','social'),
+		('primary','user-1','inbound','sender@example.net','user-1@example.com','Synthetic','primary')`).run();
+	const dependencies: string[] = [];
+	const result = await loadMailbox(db, 'user-1', 'inbox',
+		new URL('https://mail.example.test/inbox?category=social'), null,
+		(...keys) => dependencies.push(...keys));
+	assert.deepEqual(dependencies, [MAILBOX_DATA_DEPENDENCY]);
+	assert.equal(result.filters.category, 'social');
+	assert.equal(result.mailbox.total, 1);
+	assert.equal(result.mailbox.threads[0].latest_id, 'visible');
+});
 
 test('mailbox sync URLs carry the cursor only after the first snapshot', () => {
 	assert.equal(mailboxSyncUrl(null), MAILBOX_SYNC_PATH);

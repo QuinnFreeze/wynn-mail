@@ -6,17 +6,18 @@ import { getMailboxCounts } from '$lib/server/mail-store';
 import { DEFAULT_UI_THEME } from '$lib/ui-theme/ids';
 import { DEFAULT_LOCALE } from '$lib/i18n/locales';
 
-export const load: LayoutServerLoad = async ({ locals, platform }) => {
+export const load: LayoutServerLoad = async ({ locals, platform, depends }) => {
+	depends('app:mail');
 	const db = platform?.env.DB;
 	const ready = Boolean(db && locals.user && !locals.user.must_change_password);
 
 	// The sidebar shows these on every page, so they load with the shell.
-	const counts = ready
-		? await getMailboxCounts(db!, locals.user!.id, locals.activeDomainId)
-		: emptyMailboxCounts();
-	const labels = ready ? await listLabels(db!, locals.user!.id) : [];
 	// Offer "Draft reply" only when there is a model to write it.
-	const aiDrafting = ready ? await hasAiProvider(db!, locals.user!.id) : false;
+	const [counts, labels, aiDrafting] = await Promise.all([
+		ready ? getMailboxCounts(db!, locals.user!.id, locals.activeDomainId) : emptyMailboxCounts(),
+		ready ? listLabels(db!, locals.user!.id) : [],
+		ready ? hasAiProvider(db!, locals.user!.id) : false
+	]);
 
 	return {
 		user: locals.user,
