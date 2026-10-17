@@ -5,7 +5,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import { t } from '$lib/i18n';
 
-	type Kind = 'workers_ai' | 'openai' | 'anthropic' | 'openrouter';
+	type Kind = 'workers_ai' | 'openai' | 'anthropic' | 'openrouter' | 'gemini';
 	type Provider = { kind: Kind; base_url: string | null; model: string; key_hint: string | null; auth_method?: 'api_key' | 'oauth' };
 	type Settings = {
 		provider: Provider | null;
@@ -22,12 +22,15 @@
 	let { scope }: { scope: 'user' | 'instance' } = $props();
 
 	const endpoint = $derived(scope === 'instance' ? '/api/admin/ai' : '/api/settings/ai');
+	const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+	const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 
 	const MODEL_PLACEHOLDERS: Record<Kind, string> = {
 		workers_ai: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
 		openai: 'gpt-5-mini',
 		anthropic: 'claude-opus-5',
-		openrouter: 'openrouter/free'
+		openrouter: 'openrouter/free',
+		gemini: GEMINI_DEFAULT_MODEL
 	};
 
 	let settings = $state<Settings | null>(null);
@@ -52,8 +55,8 @@
 
 	const kinds = $derived<Kind[]>(
 		scope === 'instance' && settings?.workersAiAvailable
-			? ['workers_ai', 'openai', 'anthropic']
-			: scope === 'user' ? ['openrouter', 'openai', 'anthropic'] : ['openai', 'anthropic']
+			? ['workers_ai', 'openai', 'gemini', 'anthropic']
+			: scope === 'user' ? ['openrouter', 'openai', 'gemini', 'anthropic'] : ['openai', 'gemini', 'anthropic']
 	);
 	const needsKey = $derived(kind !== 'workers_ai' && kind !== 'openrouter');
 	const openrouterConnected = $derived(settings?.provider?.kind === 'openrouter' && settings.provider.auth_method === 'oauth');
@@ -80,6 +83,8 @@
 				return t('ai.kindOpenai');
 			case 'anthropic':
 				return t('ai.kindAnthropic');
+			case 'gemini':
+				return t('ai.kindGemini');
 			case 'openrouter':
 				return 'OpenRouter';
 			default: {
@@ -111,10 +116,14 @@
 		void load();
 	});
 
+	function defaultModel(value: Kind): string {
+		return value === 'openrouter' ? 'openrouter/free' : value === 'gemini' ? GEMINI_DEFAULT_MODEL : '';
+	}
+
 	function fill(provider: Provider | null) {
 		kind = provider?.kind ?? kinds[0];
 		baseUrl = provider?.base_url ?? '';
-		model = provider?.model ?? (kind === 'openrouter' ? 'openrouter/free' : '');
+		model = provider?.model ?? defaultModel(kind);
 		apiKey = '';
 	}
 
@@ -128,7 +137,7 @@
 		kind = next;
 		const saved = settings?.provider?.kind === next ? settings.provider : null;
 		baseUrl = saved?.base_url ?? '';
-		model = saved?.model ?? (next === 'openrouter' ? 'openrouter/free' : '');
+		model = saved?.model ?? defaultModel(next);
 		apiKey = '';
 	}
 
@@ -180,7 +189,12 @@
 			const response = await fetch(endpoint, {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ kind, baseUrl: kind === 'openrouter' ? 'https://openrouter.ai/api/v1' : baseUrl, model, apiKey })
+				body: JSON.stringify({
+					kind,
+					baseUrl: kind === 'openrouter' ? 'https://openrouter.ai/api/v1' : kind === 'gemini' ? GEMINI_BASE_URL : baseUrl,
+					model,
+					apiKey
+				})
 			});
 			const body = (await response.json()) as { provider?: Provider; error?: string };
 			if (!response.ok || !body.provider) {
@@ -357,12 +371,20 @@
 					{t('ai.openrouterFreeHint')}
 				{:else if kind === 'openai'}
 					{t('ai.openaiHint')}
+				{:else if kind === 'gemini'}
+					{t('ai.geminiHint')}
 				{:else}
 					{t('ai.anthropicHint')}
 				{/if}
 			</p>
+			{#if kind === 'gemini'}
+				<div class="gemini-links">
+					<a class="docs-link" href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener noreferrer">{t('ai.geminiApiKeys')} <Icon name="external-link-line" size={12} /></a>
+					<a class="docs-link" href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">{t('ai.geminiTerms')} <Icon name="external-link-line" size={12} /></a>
+				</div>
+			{/if}
 
-			{#if kind !== 'workers_ai' && kind !== 'openrouter'}
+			{#if kind === 'openai' || kind === 'anthropic'}
 				<label class="field">
 					<span>{t('ai.baseUrl')}</span>
 					<input
@@ -494,6 +516,7 @@
 	.oauth-availability { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-line); }
 	.docs-link { display: inline-flex; align-items: center; gap: 0.25rem; margin-top: 0.375rem; font-size: 0.75rem; color: var(--color-muted); text-decoration: underline; text-underline-offset: 0.15rem; }
 	.docs-link:hover { color: var(--color-text); }
+	.gemini-links { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
 	button:disabled { cursor: not-allowed; }
 
 	.ai-form {

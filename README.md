@@ -17,7 +17,8 @@ each developer decides whether to integrate them using their own accounts.
   mailboxes; standard accounts use addresses assigned to them.
 - Cloudflare inbound mail and verified-domain, Sending-access-only Resend outbound mail.
 - Web inbox, reply threading, attachment downloads and privately stored inbound `.eml` files.
-- Optional OpenRouter OAuth with free-model-only routing; explicit API-key providers.
+- Optional OpenRouter OAuth with free-model-only routing; Google Gemini,
+  OpenAI-compatible and Anthropic API-key providers.
 - REST/CLI/MCP integration. API-token and MCP sending is disabled in the reference config.
 - Synthetic tests for authentication, permissions, webhooks, storage and OAuth.
 

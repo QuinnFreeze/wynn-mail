@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, test } from 'node:test';
+// @ts-expect-error bun:sqlite is supplied by the test runtime.
+import { Database } from 'bun:sqlite';
 import {
 	AiProviderError,
 	chatCompletionsUrl,
 	generateText,
 	getAiProvider,
+	GEMINI_BASE_URL,
 	INSTANCE_OWNER,
 	OPENROUTER_BASE_URL,
 	resolveAiProvider,
@@ -32,6 +36,37 @@ const openai = {
 };
 
 describe('saveAiProvider', () => {
+	test('Gemini seals a key for its owner, fixes the host and keeps a saved key when changing models', async () => {
+		const { db, sqlite } = setup();
+		const saved = await saveAiProvider(db, env, 'user-1', { kind: 'gemini', apiKey: 'gemini-test-key-9876' });
+		assert.equal(saved.kind, 'gemini');
+		assert.equal(saved.base_url, GEMINI_BASE_URL);
+		assert.equal(saved.auth_method, 'api_key');
+		assert.equal(saved.key_hint, '9876');
+		assert.ok(!JSON.stringify(saved).includes('gemini-test-key'));
+		const stored = sqlite.query("SELECT api_key FROM ai_providers WHERE owner = 'user-1'").all()[0];
+		assert.ok(!String(stored.api_key).includes('gemini-test-key'));
+		await saveAiProvider(db, env, 'user-1', { kind: 'gemini', model: 'models/gemini-test-model' });
+		const resolved = await resolveAiProvider(db, env, 'user-1');
+		assert.equal(resolved?.apiKey, 'gemini-test-key-9876');
+		assert.equal(resolved?.model, 'gemini-test-model');
+		assert.equal(await resolveAiProvider(db, env, 'user-2'), null);
+		await assert.rejects(saveAiProvider(db, env, 'user-1', { kind: 'gemini', baseUrl: 'https://attacker.example', apiKey: 'other-test-key' }), /fixed API URL/);
+		await assert.rejects(saveAiProvider(db, env, 'user-2', { kind: 'gemini' }), /API key is required/);
+		await assert.rejects(saveAiProvider(db, env, 'user-1', { kind: 'openai', baseUrl: GEMINI_BASE_URL, model: 'gemini-test-model' }), /API key is required/);
+		await saveAiProvider(db, env, INSTANCE_OWNER, { kind: 'gemini', apiKey: 'instance-test-key' });
+		assert.equal((await resolveAiProvider(db, env, 'user-2'))?.source, 'instance');
+		assert.equal((await resolveAiProvider(db, env, 'user-1'))?.source, 'user');
+	});
+
+	test('Gemini model IDs cannot inject paths, query parameters or fragments', async () => {
+		const { db } = setup();
+		for (const model of ['../other', 'gemini-test?key=other', 'gemini-test#other', 'gemini-test/other', 'models/models/gemini-test', 'https://attacker.example']) {
+			await assert.rejects(saveAiProvider(db, env, 'user-1', { kind: 'gemini', model, apiKey: 'gemini-test-key' }), /Gemini model ID/);
+		}
+		assert.equal(await getAiProvider(db, 'user-1'), null);
+	});
+
 	test('stores a personal key sealed, showing only its last four characters', async () => {
 		const { db, sqlite } = setup();
 		const saved = await saveAiProvider(db, env, 'user-1', openai);
@@ -180,6 +215,60 @@ describe('resolveAiProvider', () => {
 
 describe('generateText', () => {
 	const request = { system: 'Be brief.', prompt: 'Say hi.' };
+	const gemini: ResolvedAiProvider = { source: 'user', kind: 'gemini', baseUrl: 'https://attacker.example', model: 'gemini-test-model', apiKey: 'gemini-test-secret' };
+
+	test('Gemini uses the native fixed endpoint, header-only key and separate system instruction', async () => {
+		const calls: { url: string; init: RequestInit }[] = [];
+		const fetcher = (async (url: string, init: RequestInit) => {
+			calls.push({ url, init });
+			return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ thought: true, text: 'Internal thought.' }, { text: ' Hello' }, { inlineData: { data: 'not-text' } }, { text: ' there. ' }] } }] });
+		}) as unknown as typeof fetch;
+		assert.equal(await generateText(env, gemini, { ...request, maxTokens: 1_024 }, fetcher), 'Hello there.');
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].url, `${GEMINI_BASE_URL}/models/gemini-test-model:generateContent`);
+		assert.ok(!calls[0].url.includes('gemini-test-secret'));
+		assert.equal(calls[0].init.redirect, 'manual');
+		assert.equal(new Headers(calls[0].init.headers).get('x-goog-api-key'), gemini.apiKey);
+		const body = JSON.parse(String(calls[0].init.body));
+		assert.deepEqual(body.systemInstruction, { parts: [{ text: 'Be brief.' }] });
+		assert.deepEqual(body.contents, [{ role: 'user', parts: [{ text: 'Say hi.' }] }]);
+		assert.equal(body.generationConfig.maxOutputTokens, 1_024);
+	});
+
+	test('Gemini rejects tampered model paths and missing keys before sending anything', async () => {
+		let sent = false;
+		const fetcher = (async () => { sent = true; throw new Error('must not send'); }) as typeof fetch;
+		await assert.rejects(generateText(env, { ...gemini, model: 'gemini-test?key=other' }, request, fetcher), /Gemini model ID/);
+		await assert.rejects(generateText(env, { ...gemini, apiKey: null }, request, fetcher), /no API key/);
+		assert.equal(sent, false);
+	});
+
+	test('Gemini quota, authorization, redirects and transport errors never reflect credentials or response data', async () => {
+		for (const status of [307, 400, 401, 403, 404, 429, 500]) {
+			const fetcher = (async () => Response.json({ error: { message: 'gemini-test-secret private@example.test' } }, { status, headers: { Location: 'https://attacker.example/gemini-test-secret' } })) as typeof fetch;
+			await assert.rejects(generateText(env, gemini, request, fetcher), (error: unknown) =>
+				error instanceof AiProviderError && !error.message.includes('gemini-test-secret') && !error.message.includes('private@example.test') &&
+				!error.message.includes('attacker.example') && (status !== 429 || error.status === 429));
+		}
+		const fetcher = (async () => { throw new Error('gemini-test-secret'); }) as typeof fetch;
+		await assert.rejects(generateText(env, gemini, request, fetcher), (error: unknown) => error instanceof AiProviderError && !error.message.includes('gemini-test-secret'));
+	});
+
+	test('Gemini safety blocks, truncation, invalid JSON and thought-only replies never become drafts', async () => {
+		for (const body of [
+			{ promptFeedback: { blockReason: 'SAFETY' } },
+			{ candidates: [{ finishReason: 'SAFETY', content: { parts: [{ text: 'Do not return this.' }] } }] },
+			{ candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'Unfinished sentence' }] } }] },
+			{ candidates: [{ content: { parts: [{ text: 'No completion status.' }] } }] },
+			{ candidates: [{ finishReason: 'STOP', content: { parts: [{ thought: true, text: 'Internal thought.' }] } }] },
+			{ candidates: [{ finishReason: 'STOP', content: { parts: 'invalid' } }] }
+		]) {
+			const fetcher = (async () => Response.json(body)) as typeof fetch;
+			await assert.rejects(generateText(env, gemini, request, fetcher), AiProviderError);
+		}
+		const fetcher = (async () => new Response('not-json')) as typeof fetch;
+		await assert.rejects(generateText(env, gemini, request, fetcher), /incomplete response/);
+	});
 
 	test('OpenRouter never sends the OAuth key to a configured custom host or a paid model', async () => {
 		const calls: { url: string; init: RequestInit }[] = [];
@@ -382,4 +471,28 @@ describe('chatCompletionsUrl', () => {
 		assert.equal(chatCompletionsUrl('https://x.test/v1'), 'https://x.test/v1/chat/completions');
 		assert.equal(chatCompletionsUrl('https://x.test/v1/chat/completions/'), 'https://x.test/v1/chat/completions');
 	});
+});
+
+test('Gemini migration preserves ciphertext, OAuth authentication and ownership constraints', () => {
+	const sqlite = new Database(':memory:');
+	sqlite.exec('PRAGMA foreign_keys = ON');
+	const directory = new URL('../../../migrations/', import.meta.url);
+	for (const migration of readdirSync(directory).filter((name) => name.endsWith('.sql') && name < '0035_gemini_provider.sql').sort()) {
+		sqlite.exec(readFileSync(new URL(migration, directory), 'utf8'));
+	}
+	for (const id of ['legacy', 'new-user']) sqlite.query('INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)').run(id, `${id}@example.test`, id, 'synthetic');
+	sqlite.query(`INSERT INTO ai_providers (owner, user_id, kind, model, api_key, key_hint, updated_at, auth_method)
+		VALUES ('legacy', 'legacy', 'openrouter', 'openrouter/free', 'v1.unchanged.ciphertext', 'kept', '2026-10-01', 'oauth')`).run();
+	sqlite.query("INSERT INTO ai_providers (owner, kind, model, auth_method) VALUES ('instance', 'workers_ai', 'kept-model', 'binding')").run();
+	const before = sqlite.query('SELECT * FROM ai_providers ORDER BY owner').all();
+	sqlite.exec('BEGIN');
+	sqlite.exec(readFileSync(new URL('0035_gemini_provider.sql', directory), 'utf8'));
+	sqlite.exec('COMMIT');
+	assert.deepEqual(sqlite.query('SELECT * FROM ai_providers ORDER BY owner').all(), before);
+	sqlite.query("INSERT INTO ai_providers (owner, user_id, kind, model) VALUES ('new-user', 'new-user', 'gemini', 'gemini-test-model')").run();
+	assert.throws(() => sqlite.query("UPDATE ai_providers SET auth_method = 'oauth' WHERE owner = 'new-user'").run());
+	assert.throws(() => sqlite.query("UPDATE ai_providers SET auth_method = 'binding' WHERE owner = 'new-user'").run());
+	assert.throws(() => sqlite.query("INSERT INTO ai_providers (owner, user_id, kind, model) VALUES ('mismatch', 'new-user', 'gemini', 'gemini-test-model')").run());
+	sqlite.query("DELETE FROM users WHERE id = 'new-user'").run();
+	assert.equal(sqlite.query("SELECT * FROM ai_providers WHERE owner = 'new-user'").get(), null);
 });

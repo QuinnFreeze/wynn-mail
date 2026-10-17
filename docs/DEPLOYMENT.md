@@ -146,6 +146,11 @@ vendor account if your privacy requirements require that separation.
 Leave all four `OAUTH_*` secrets empty until you choose to build an integration.
 Create your own clients and exact HTTPS callbacks:
 
+Cloning this repository does not connect an account or provide an OAuth project.
+Do not reuse another deployment's client ID, client secret, project or session.
+The source has no operator-specific OAuth fallback; unconfigured sign-in buttons
+stay unavailable until you supply your own client configuration.
+
 | Provider | Callback on your origin | Identity permission |
 | --- | --- | --- |
 | Google | `/api/auth/social/google/callback` | `openid email` |
@@ -161,6 +166,36 @@ OpenRouter connection starts in AI settings. Its callback is
 `/api/settings/ai/oauth/openrouter/callback`. No OpenRouter account, key or cached
 connection is distributed. OAuth permits free models only; examine actual provider
 retention/availability before authorizing. ChatGPT/Claude subscription login is not included.
+
+## Optional Gemini API drafting
+
+In Settings → AI drafting, choose Google Gemini and enter an API key from your
+own [Google AI Studio project](https://aistudio.google.com/api-keys), together with
+a Gemini text model available to that project (default: `gemini-3.5-flash-lite`).
+The administrator can instead set an instance default; a user's own provider
+takes precedence. Apply migration
+`0035_gemini_provider.sql` before using this provider.
+
+Gemini uses the native Google API at
+`https://generativelanguage.googleapis.com/v1beta`; the host cannot be overridden.
+Keys are encrypted in D1 under your Worker `ENCRYPTION_KEY` and sent server-side
+in the `x-goog-api-key` header, never in URLs. This does not reuse Google sign-in
+OAuth credentials or grant Gmail access. No API key or Google project is bundled.
+
+Saving a provider does not call the model. Testing a connection sends a short
+test prompt; requesting a draft sends the selected conversation and drafting
+instructions to Google. Quotas, billing and data handling depend on your own
+Google project and the provider's current terms; configuring Gemini does not
+enable billing automatically or guarantee a free tier. Review the
+[current model pricing and free-tier availability](https://ai.google.dev/gemini-api/docs/pricing),
+[Gemini API documentation](https://ai.google.dev/gemini-api/docs) and
+[API terms](https://ai.google.dev/gemini-api/terms) before sending sensitive mail.
+Google's unpaid-service terms prohibit submitting sensitive, confidential or
+personal information. Drafting includes sender identities and conversation text;
+only use a project whose applicable terms permit that data. A free model's
+availability is not permission to send private mail, and accepting an app prompt
+does not override Google's terms. This app does not verify your billing or
+regional eligibility and does not enable billing for you.
 
 ## Verify your own installation
 

@@ -7,7 +7,7 @@ import { basename } from 'node:path';
 const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
 assert(files.length > 0, 'Stage the public source before checking it.');
 const forbiddenPath = /(^|\/)(node_modules|\.svelte-kit|\.wrangler|\.build|\.git|evidence|backups|\.private|coverage)(\/|$)|\.(?:db|sqlite\d*|eml|mbox|har|pem|key|p12|pfx|log|zip|tgz)$/i;
-const credentials = /(?:GOCSPX-[A-Za-z0-9_-]{15,}|gh[pousr]_[A-Za-z0-9_]{30,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b\d{10,}-[a-z0-9]{10,}\.apps\.googleusercontent\.com\b)/;
+const credentials = /(?:GOCSPX-[A-Za-z0-9_-]{15,}|AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9_]{30,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b\d{10,}-[a-z0-9]{10,}\.apps\.googleusercontent\.com\b)/;
 for (const file of files) {
   assert(!forbiddenPath.test(file), `Private/runtime file is tracked: ${file}`);
   const name = basename(file);
@@ -20,6 +20,7 @@ for (const file of files) {
   if (!/\.(png|woff2?)$/.test(file)) {
     const body = readFileSync(file, 'utf8');
     assert(!credentials.test(body), `Credential-shaped content: ${file}`);
+    assert(!/https:\/\/(?:console\.cloud\.google\.com|aistudio\.google\.com)\/[^\s"'<>]*[?&]project=/i.test(body), `Prefilled Google project link: ${file}`);
     assert(!/\/(?:Users|home)\/[^\s/'"]+\//.test(body), `Machine-specific path: ${file}`);
   }
 }
@@ -28,6 +29,11 @@ assert(!config.account_id && !config.routes, 'Personal account/domain route must
 assert.equal(config.d1_databases[0].database_id, '00000000-0000-0000-0000-000000000000');
 assert.equal(config.kv_namespaces[0].id, '00000000000000000000000000000000');
 for (const key of ['APP_URL', 'CLOUDFLARE_MAIL_DOMAINS', 'RESEND_VERIFIED_SEND_DOMAINS']) assert.equal(config.vars[key], '');
+for (const [key, value] of Object.entries(config.vars ?? {})) {
+  if (/^OAUTH_|(?:CLIENT_ID|CLIENT_SECRET|API_KEY|TOKEN|PRIVATE_KEY|ENCRYPTION_KEY|CREDENTIALS?)$|^VAPID_SUBJECT$|^TELEGRAM_/.test(key)) {
+    assert.equal(value, '', `Reference configuration must leave ${key} empty.`);
+  }
+}
 assert.equal(config.vars.API_SEND_ENABLED, 'false');
 assert(!config.r2_buckets && !config.ai, 'Reference config must not provision R2 or Workers AI.');
 for (const line of readFileSync('.dev.vars.example', 'utf8').split('\n')) {

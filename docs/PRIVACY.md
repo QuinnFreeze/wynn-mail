@@ -28,6 +28,22 @@ Google asks for `openid email`, not Gmail access. GitHub uses empty scope and pu
 tokens are not stored as mailbox access credentials. OpenRouter OAuth yields a
 separate API key, AES-GCM encrypted in D1 using the operator's Worker secret.
 
+Google Gemini drafting uses a separately supplied API key from the user's or
+operator's own project, not the Google sign-in OAuth client. The key is encrypted
+in D1 and sent only by the Worker to the fixed Google API host. Saving a provider
+does not send mail content; a connection test sends a short test prompt, and an
+explicit drafting request sends the conversation data described above. Google
+project quota, billing and applicable data-use terms are the account holder's
+responsibility. No Google project, OAuth client ID, API key or linked account is
+included in this source distribution.
+Google's unpaid-service terms prohibit submitting sensitive, confidential or
+personal information, and may allow input/output to improve its products. Since
+drafting includes sender identities and conversation text, private mail requires
+a project whose applicable terms permit that data. Region and account terms can
+differ; review the [Gemini API terms](https://ai.google.dev/gemini-api/terms).
+Consent in this app does not override those restrictions. This app does not
+verify billing/regional eligibility, promise zero retention or enable billing.
+
 At-rest encryption does not prevent the Worker/operator from reading mail/keys.
 HTTPS is transport encryption, not end-to-end mail encryption. Free AI routing
 does not imply zero collection/retention/training. Requests do not force

@@ -10,21 +10,23 @@ import { advanceAiConnectionStatement } from './ai-connection';
  * (secret-box.ts) and only ever opened here, just before a request.
  */
 
-export const AI_PROVIDER_KINDS = ['workers_ai', 'openai', 'anthropic', 'openrouter'] as const;
+export const AI_PROVIDER_KINDS = ['workers_ai', 'openai', 'anthropic', 'openrouter', 'gemini'] as const;
 export type AiProviderKind = (typeof AI_PROVIDER_KINDS)[number];
 
 /** Workers AI bills the instance's own Cloudflare account, so only an admin can pick it. */
-export const PERSONAL_PROVIDER_KINDS: readonly AiProviderKind[] = ['openai', 'anthropic', 'openrouter'];
+export const PERSONAL_PROVIDER_KINDS: readonly AiProviderKind[] = ['openai', 'anthropic', 'openrouter', 'gemini'];
 
 export const INSTANCE_OWNER = 'instance';
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 /** OpenAI-compatible servers each name their own models, so that one has no default. */
 export const DEFAULT_MODELS: Record<AiProviderKind, string> = {
 	workers_ai: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
 	openai: '',
 	anthropic: 'claude-opus-5',
-	openrouter: 'openrouter/free'
+	openrouter: 'openrouter/free',
+	gemini: 'gemini-3.5-flash-lite'
 };
 
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -124,6 +126,15 @@ function httpsUrl(value: string): string {
 	return value.replace(/\/+$/, '');
 }
 
+/** Model IDs are path segments, never URLs or query parameters. */
+function geminiModel(value: string): string {
+	const model = value.replace(/^models\//, '');
+	if (!/^gemini-[A-Za-z0-9][A-Za-z0-9._-]*$/.test(model) || model.length > MAX_MODEL) {
+		throw new AiProviderError('Use a Gemini model ID, such as gemini-3.5-flash-lite');
+	}
+	return model;
+}
+
 /**
  * Create or replace a provider. Leaving the key blank keeps the saved one, but
  * only for the same kind and base URL, so a stored key never moves to a new host.
@@ -167,8 +178,9 @@ async function saveProvider(
 	const kind = allowed.find((candidate) => candidate === input.kind);
 	if (!kind) throw new AiProviderError('Choose a supported provider');
 
-	const model = text(input.model, MAX_MODEL, 'Model') || DEFAULT_MODELS[kind];
+	let model = text(input.model, MAX_MODEL, 'Model') || DEFAULT_MODELS[kind];
 	if (!model) throw new AiProviderError('Model is required');
+	if (kind === 'gemini') model = geminiModel(model);
 	if (kind === 'openrouter' && !isFreeOpenRouterModel(model)) {
 		throw new AiProviderError('OpenRouter drafting only accepts openrouter/free or a :free model');
 	}
@@ -185,7 +197,12 @@ async function saveProvider(
 	} else {
 		const rawUrl = text(input.baseUrl, MAX_URL, 'Base URL');
 		if (kind === 'openai' && !rawUrl) throw new AiProviderError('Base URL is required');
-		if (kind === 'openrouter') {
+		if (kind === 'gemini') {
+			if (rawUrl && rawUrl.replace(/\/+$/, '') !== GEMINI_BASE_URL) {
+				throw new AiProviderError('Gemini uses its official fixed API URL');
+			}
+			baseUrl = GEMINI_BASE_URL;
+		} else if (kind === 'openrouter') {
 			if (rawUrl && rawUrl.replace(/\/+$/, '') !== OPENROUTER_BASE_URL) {
 				throw new AiProviderError('OpenRouter uses its official fixed API URL');
 			}
@@ -322,7 +339,7 @@ async function openProvider(env: AiEnv, row: ProviderRow): Promise<ResolvedAiPro
 	return {
 		source,
 		kind: row.kind,
-		baseUrl: row.kind === 'openrouter' ? OPENROUTER_BASE_URL : row.base_url,
+		baseUrl: row.kind === 'openrouter' ? OPENROUTER_BASE_URL : row.kind === 'gemini' ? GEMINI_BASE_URL : row.base_url,
 		model: row.model,
 		apiKey
 	};
@@ -372,6 +389,8 @@ export async function generateText(
 				return openAiCompatibleText({ ...provider, baseUrl: OPENROUTER_BASE_URL }, request, fetcher);
 			case 'anthropic':
 				return anthropicText(provider, request, fetcher);
+			case 'gemini':
+				return geminiText(provider, request, fetcher);
 			default: {
 				const _never: never = provider.kind;
 				return _never;
@@ -381,6 +400,63 @@ export async function generateText(
 	const trimmed = output.trim();
 	if (!trimmed) throw new AiProviderError('The model returned an empty response', 502);
 	return trimmed;
+}
+
+/** Native Gemini calls keep the key in a header and never follow redirects. */
+async function geminiText(
+	provider: ResolvedAiProvider,
+	request: TextRequest,
+	fetcher: typeof fetch
+): Promise<string> {
+	if (!provider.apiKey) throw new AiProviderError('The Gemini provider has no API key', 503);
+	const model = geminiModel(provider.model);
+	let response: Response;
+	try {
+		response = await fetcher(`${GEMINI_BASE_URL}/models/${model}:generateContent`, {
+			method: 'POST',
+			redirect: 'manual',
+			headers: { 'x-goog-api-key': provider.apiKey, 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				systemInstruction: { parts: [{ text: request.system }] },
+				contents: [{ role: 'user', parts: [{ text: request.prompt }] }],
+				generationConfig: { maxOutputTokens: request.maxTokens ?? 4_096 }
+			}),
+			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+		});
+	} catch {
+		throw new AiProviderError('Could not reach Gemini. Try again later.', 502);
+	}
+	if (!response.ok) {
+		if (response.status === 429) {
+			throw new AiProviderError('Gemini quota or rate limit reached. Check your Google project quota and try again later.', 429);
+		}
+		if (response.status === 401 || response.status === 403) {
+			throw new AiProviderError('Gemini rejected the API key or this Google project cannot access the model.', 502);
+		}
+		if (response.status === 404) {
+			throw new AiProviderError('Gemini model not found. Check its name and your Google project model access.', 502);
+		}
+		throw new AiProviderError(`Gemini answered ${response.status}. Check the model and your Google project settings.`, 502);
+	}
+	const body = await response.json().catch(() => null) as {
+		promptFeedback?: { blockReason?: string };
+		candidates?: { finishReason?: string; content?: { parts?: { text?: unknown; thought?: boolean }[] } }[];
+	} | null;
+	const candidate = body?.candidates?.[0];
+	if (body?.promptFeedback?.blockReason ||
+		(candidate?.finishReason && !['STOP', 'MAX_TOKENS'].includes(candidate.finishReason))) {
+		throw new AiProviderError('Gemini declined to write this draft.', 502);
+	}
+	if (candidate?.finishReason === 'MAX_TOKENS') {
+		throw new AiProviderError('Gemini reached its output limit before completing the draft. Try a shorter conversation or a different model.', 502);
+	}
+	if (candidate?.finishReason !== 'STOP') {
+		throw new AiProviderError('Gemini returned an incomplete response. Try again.', 502);
+	}
+	const parts = candidate?.content?.parts;
+	return Array.isArray(parts)
+		? parts.filter((part) => part && part.thought !== true && typeof part.text === 'string').map((part) => part.text).join('')
+		: '';
 }
 
 async function workersAiText(
